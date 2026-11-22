@@ -8,6 +8,7 @@ vk_compute_test with VKC_BENCH=`reps` timed dispatches of `groups` workgroups; t
 dispatches, the spread of the per-process medians (other programs share the GPU, so look at it), the number of
 translated segments (static: blocks + continuation segments; every continuation segment is one more workgroup barrier
 on the path through it) and whether the output bytes of the emulated runs equal the native AMD run, which is the reference (they must).
+Each benchmark process uses the standard LEONIDA_GPU_TEST_TIMEOUT limit (0 disables it).
 """
 import argparse
 import json
@@ -22,7 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHADER_DIR = os.path.join(ROOT, "runtime", "test", "shaders")
 BUILD_PY = os.path.join(SHADER_DIR, "build.py")
 sys.path.insert(0, SHADER_DIR)
-from check import EXE, pick_build_dir  # noqa: E402
+from check import EXE, gpu_test_timeout, pick_build_dir, timed_out  # noqa: E402
 
 COMPUTE_TEST = "vk_compute_test" + EXE
 CONFIGS = [("AMD native", "*amd*,*radeon*", False), ("AMD --wave64-emulate", "*amd*,*radeon*", True),
@@ -58,8 +59,11 @@ def run(tools, spv, groups, reps, driver, emulate):
     args = [os.path.join(tools, COMPUTE_TEST), spv, str(groups), "dump"]
     if not emulate:
         args.append("--require-wave64")
+    limit = gpu_test_timeout()
     try:
-        r = subprocess.run(args, env=env, capture_output=True, text=True)
+        r = subprocess.run(args, env=env, capture_output=True, text=True, timeout=limit)
+    except subprocess.TimeoutExpired:
+        return None, timed_out(args[0], limit), None
     except OSError as e:
         return None, f"{args[0]}: {e}", None
     out = r.stdout + r.stderr

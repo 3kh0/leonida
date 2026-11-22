@@ -2,7 +2,7 @@
 
     python -I tests/test_replace_retry.py -v
 
-No game data and no Windows needed: the error is simulated by patching os.replace.
+Synthetic files only. Tests that exercise native file sharing are Windows-only.
 """
 import contextlib
 import errno
@@ -115,6 +115,30 @@ class ReplaceRetryTests(unittest.TestCase):
                     with self.assertRaises(type(error)):
                         replace_retry.replace(self.src, self.dst)
                 self.assertEqual(len(fake.calls), 1)
+
+    def check_native_lock(self, locked_path):
+        # A normal Python file handle on Windows allows readers but denies deletion.
+        with open(locked_path, "rb") as held:
+            with self.assertRaises(PermissionError) as caught:
+                REAL_REPLACE(self.src, self.dst)
+            self.assertIn(caught.exception.winerror, (5, 32))
+            self.assertEqual(self.read_dst(), "old")
+
+            # Release the handle after the retry helper hits the real sharing error.
+            self.sleep.side_effect = lambda _: held.close()
+            replace_retry.replace(self.src, self.dst)
+
+        self.sleep.assert_called()
+        self.assertEqual(self.read_dst(), "new")
+        self.assertFalse(os.path.exists(self.src))
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows file sharing")
+    def test_real_source_lock(self):
+        self.check_native_lock(self.src)
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows file sharing")
+    def test_real_destination_lock(self):
+        self.check_native_lock(self.dst)
 
     def test_real_replace_overwrites(self):
         replace_retry.replace(self.src, self.dst)

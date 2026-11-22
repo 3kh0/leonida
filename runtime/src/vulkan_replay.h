@@ -847,6 +847,9 @@ struct ReplayFunctions {
     PFN_vkCmdDrawIndirectCount draw_indirect_count = nullptr;
     PFN_vkCmdDrawIndexedIndirectCount draw_indexed_indirect_count = nullptr;
     PFN_vkCmdDispatchIndirect dispatch_indirect = nullptr;
+    // VK_EXT_mesh_shader: DISPATCH_MESH signatures. The count variant also needs drawIndirectCount.
+    PFN_vkCmdDrawMeshTasksIndirectEXT draw_mesh_tasks_indirect = nullptr;
+    PFN_vkCmdDrawMeshTasksIndirectCountEXT draw_mesh_tasks_indirect_count = nullptr;
     // multiDrawIndirect: one vkCmdDraw*Indirect may take a drawCount above 1; without it each command is its own call.
     bool multi_draw_indirect = false;
     // VkPhysicalDeviceLimits::maxDrawIndirectCount: a call takes at most this many records.
@@ -1428,6 +1431,7 @@ inline VkDeviceSize indirect_record_size(IndirectKind kind) {
     case IndirectKind::draw: return sizeof(VkDrawIndirectCommand);
     case IndirectKind::draw_indexed: return sizeof(VkDrawIndexedIndirectCommand);
     case IndirectKind::dispatch: return sizeof(VkDispatchIndirectCommand);
+    case IndirectKind::dispatch_mesh: return sizeof(VkDrawMeshTasksIndirectCommandEXT);
     }
     return 0;
 }
@@ -2075,6 +2079,9 @@ inline void emit_indirect(const ReplayFunctions& vk, VkCommandBuffer command_buf
         } else if (ind.kind == IndirectKind::draw_indexed) {
             vk.draw_indexed_indirect_count(command_buffer, p.binding.buffer, arguments, p.source.buffer, count,
                                            ind.max_count, ind.stride);
+        } else if (ind.kind == IndirectKind::dispatch_mesh) {
+            vk.draw_mesh_tasks_indirect_count(command_buffer, p.binding.buffer, arguments, p.source.buffer, count,
+                                              ind.max_count, ind.stride);
         }
         return;
     }
@@ -2094,6 +2101,15 @@ inline void emit_indirect(const ReplayFunctions& vk, VkCommandBuffer command_buf
             const std::uint32_t n = std::uint32_t(std::min<std::uint64_t>(per_call, ind.max_count - k));
             vk.draw_indexed_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride, n,
                                      ind.stride);
+            k += n;
+        }
+    } else if (ind.kind == IndirectKind::dispatch_mesh) {
+        // multiDrawIndirect and maxDrawIndirectCount bound a mesh call's drawCount as they bound a draw's
+        // (VUID-vkCmdDrawMeshTasksIndirectEXT-drawCount-02718/02719).
+        for (std::uint64_t k = 0; k < ind.max_count;) {
+            const std::uint32_t n = std::uint32_t(std::min<std::uint64_t>(per_call, ind.max_count - k));
+            vk.draw_mesh_tasks_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride, n,
+                                        ind.stride);
             k += n;
         }
     } else if (ind.kind == IndirectKind::dispatch) {
@@ -2799,12 +2815,14 @@ ReplayResult prepare(const CommandList& list, Resolve&& resolve, const ReplayFun
                 p.source = *cnt;
                 if ((ind->kind == IndirectKind::draw && !vk.draw_indirect_count) ||
                     (ind->kind == IndirectKind::draw_indexed && !vk.draw_indexed_indirect_count) ||
+                    (ind->kind == IndirectKind::dispatch_mesh && !vk.draw_mesh_tasks_indirect_count) ||
                     ind->kind == IndirectKind::dispatch)
                     return ReplayResult::unsupported;
             } else {
                 if ((ind->kind == IndirectKind::draw && !vk.draw_indirect) ||
                     (ind->kind == IndirectKind::draw_indexed && !vk.draw_indexed_indirect) ||
-                    (ind->kind == IndirectKind::dispatch && !vk.dispatch_indirect))
+                    (ind->kind == IndirectKind::dispatch && !vk.dispatch_indirect) ||
+                    (ind->kind == IndirectKind::dispatch_mesh && !vk.draw_mesh_tasks_indirect))
                     return ReplayResult::unsupported;
             }
             if (ind->kind != IndirectKind::dispatch && !ind->state && !ind->raw) return ReplayResult::unsupported;

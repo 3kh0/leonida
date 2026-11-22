@@ -151,12 +151,28 @@ def test_vs_input_survey_error_handling_and_json_guards():
         dx = build(os.path.join(tmp, "valid"))
         idx_path = os.path.join(dx, "index.json")
         asm_path = os.path.join(dx, "disasm", "a_vs.s")
-        for target in (idx_path, asm_path, dx, os.path.join(dx, "disasm")):
+        upper_case_dir = os.path.join(tmp, "upper_case")
+        os.makedirs(os.path.join(upper_case_dir, "disasm", "sub"), exist_ok=True)
+        with open(os.path.join(upper_case_dir, "index.json"), "w", encoding="utf-8") as f:
+            f.write('[{"stage": "vs", "file": "demo.dxbc"}, {"stage": "vs", "file": "sub/nested.dxbc"}]')
+        upper_listing = os.path.join(upper_case_dir, "disasm", "demo.S")
+        nested_listing = os.path.join(upper_case_dir, "disasm", "sub", "nested.s")
+        for listing in (upper_listing, nested_listing):
+            with open(listing, "w", encoding="utf-8", newline="\n") as f:
+                f.write("\ts_endpgm\n")
+        for dx_arg, target in (
+            (dx, idx_path),
+            (dx, asm_path),
+            (dx, dx),
+            (dx, os.path.join(dx, "disasm")),
+            (upper_case_dir, upper_listing),
+            (upper_case_dir, nested_listing),
+        ):
             before = None
             if os.path.isfile(target):
                 with open(target, "rb") as f:
                     before = f.read()
-            res = run(dx, "--json", target)
+            res = run(dx_arg, "--json", target)
             check(res.returncode == 2 and "Traceback" not in res.stderr,
                   f"--json refuses overwriting/directory target {os.path.basename(target)}")
             if before is not None:

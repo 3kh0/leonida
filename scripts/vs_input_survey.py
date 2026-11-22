@@ -119,20 +119,8 @@ def _same_output_path(first, second):
         return False
 
 
-def _protected_inputs(dxbc_dir):
-    """Folders and source files in `dxbc_dir` read by `survey()`."""
-    paths = [dxbc_dir, os.path.join(dxbc_dir, "index.json")]
-    disasm = os.path.join(dxbc_dir, "disasm")
-    if os.path.exists(disasm):
-        paths.append(disasm)
-        if os.path.isdir(disasm):
-            for entry in os.scandir(disasm):
-                if entry.name.endswith(".s") and entry.is_file():
-                    paths.append(entry.path)
-    return paths
-
-
-def survey(dxbc_dir):
+def _vs_names(dxbc_dir):
+    """Shader stems for vertex shaders listed in ``dxbc_dir/index.json``."""
     index_path = os.path.join(dxbc_dir, "index.json")
     with open(index_path, encoding="utf-8") as f:
         index = json.load(f)
@@ -148,6 +136,32 @@ def survey(dxbc_dir):
         if not isinstance(file_name, str) or not file_name:
             raise ValueError(f"{index_path}: entry {i} is missing string 'file'")
         names.append(os.path.splitext(file_name)[0])
+    return names
+
+
+def _protected_inputs(dxbc_dir):
+    """Folders and source files in `dxbc_dir` read by `survey()`."""
+    paths = [dxbc_dir, os.path.join(dxbc_dir, "index.json")]
+    disasm = os.path.join(dxbc_dir, "disasm")
+    if os.path.exists(disasm):
+        paths.append(disasm)
+        if os.path.isdir(disasm):
+            for entry in os.scandir(disasm):
+                if entry.name.lower().endswith(".s") and entry.is_file():
+                    paths.append(entry.path)
+            try:
+                vs_names = _vs_names(dxbc_dir)
+            except (OSError, ValueError):
+                vs_names = ()
+            for n in vs_names:
+                asm_path = os.path.join(disasm, n + ".s")
+                if os.path.isfile(asm_path):
+                    paths.append(asm_path)
+    return paths
+
+
+def survey(dxbc_dir):
+    names = _vs_names(dxbc_dir)
     markers, vgprs, families = Counter(), Counter(), Counter()
     missing = 0
     for n in names:

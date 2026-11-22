@@ -782,6 +782,8 @@ struct ReplayFunctions {
     PFN_vkCmdDrawIndirectCount draw_indirect_count = nullptr;
     PFN_vkCmdDrawIndexedIndirectCount draw_indexed_indirect_count = nullptr;
     PFN_vkCmdDispatchIndirect dispatch_indirect = nullptr;
+    // multiDrawIndirect: one vkCmdDraw*Indirect may take a drawCount above 1; without it each command is its own call.
+    bool multi_draw_indirect = false;
     // Optional VK_KHR_acceleration_structure: BuildRaytracingAccelerationStructure.
     PFN_vkCmdBuildAccelerationStructuresKHR build_acceleration_structures = nullptr;
     // XDXR BVH4 builds (xdxr_build.h), used instead of the KHR ones when set: `xdxr_check` refuses inputs the builder
@@ -1645,6 +1647,44 @@ inline VkPrimitiveTopology vulkan_topology(std::uint32_t topology) {
     }
 }
 
+// The graphics state a command draws with: a Draw's own, or an indirect draw's.
+inline const Draw* draw_of(const Command& command) {
+    if (const auto* draw = std::get_if<Draw>(&command)) return draw;
+    if (const auto* indirect = std::get_if<ExecuteIndirect>(&command)) return indirect->state.get();
+    return nullptr;
+}
+
+// The indirect call itself: p.binding is the argument buffer, p.source the count buffer.
+inline void emit_indirect(const ReplayFunctions& vk, VkCommandBuffer command_buffer, const Prepared& p,
+                          const ExecuteIndirect& ind) {
+    const VkDeviceSize arguments = p.binding.buffer_offset + ind.argument_offset;
+    if (ind.count_buffer) {
+        const VkDeviceSize count = p.source.buffer_offset + ind.count_offset;
+        if (ind.kind == IndirectKind::draw) {
+            vk.draw_indirect_count(command_buffer, p.binding.buffer, arguments, p.source.buffer, count, ind.max_count,
+                                   ind.stride);
+        } else if (ind.kind == IndirectKind::draw_indexed) {
+            vk.draw_indexed_indirect_count(command_buffer, p.binding.buffer, arguments, p.source.buffer, count,
+                                           ind.max_count, ind.stride);
+        }
+        return;
+    }
+    // Without multiDrawIndirect a call draws one command: loop over them.
+    const std::uint32_t per_call = vk.multi_draw_indirect ? ind.max_count : 1;
+    if (ind.kind == IndirectKind::draw) {
+        for (std::uint32_t k = 0; k < ind.max_count; k += per_call)
+            vk.draw_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride, per_call,
+                             ind.stride);
+    } else if (ind.kind == IndirectKind::draw_indexed) {
+        for (std::uint32_t k = 0; k < ind.max_count; k += per_call)
+            vk.draw_indexed_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride,
+                                     per_call, ind.stride);
+    } else if (ind.kind == IndirectKind::dispatch) {
+        for (std::uint32_t k = 0; k < ind.max_count; ++k)
+            vk.dispatch_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride);
+    }
+}
+
 // Moves an attachment's tracked pieces to `layout` before rendering (first use zero-fills, as everywhere).
 inline void to_attachment(const ReplayFunctions& vk, VkCommandBuffer command_buffer, Prepared::Attachment& a,
                           VkImageLayout layout, VkAccessFlags access, VkPipelineStageFlags stages,
@@ -2232,6 +2272,10 @@ ReplayResult prepare(const CommandList& list, Resolve&& resolve, const ReplayFun
                     (ind->kind == IndirectKind::dispatch && !vk.dispatch_indirect))
                     return ReplayResult::unsupported;
             }
+            // A draw with the list's graphics state: prepared as a Draw is (the argument and count buffers stay in
+            // p.binding and p.source).
+            if (ind->state)
+                if (const auto r = detail::prepare_draw(*ind->state, resolve, vk, p); r != ReplayResult::success) return r;
         } else if (const auto* build = std::get_if<BuildAccelerationStructure>(&command)) {
             if (vk.xdxr_check) {
                 if (!vk.xdxr_check(*build)) return ReplayResult::unsupported;
@@ -2936,29 +2980,8 @@ inline void emit(const PreparedList& prepared, VkCommandBuffer command_buffer, c
                                    VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
                                    VK_PIPELINE_STAGE_TRANSFER_BIT);
             vk.copy_buffer(command_buffer, p.source.buffer, p.binding.buffer, 1, p.buffer_copies.data());
-        } else if (const auto* ind = std::get_if<ExecuteIndirect>(&command)) {
-            const VkDeviceSize arguments = p.binding.buffer_offset + ind->argument_offset;
-            if (ind->count_buffer) {
-                const VkDeviceSize count = p.source.buffer_offset + ind->count_offset;
-                if (ind->kind == IndirectKind::draw) {
-                    vk.draw_indirect_count(command_buffer, p.binding.buffer, arguments, p.source.buffer,
-                                           count, ind->max_count, ind->stride);
-                } else if (ind->kind == IndirectKind::draw_indexed) {
-                    vk.draw_indexed_indirect_count(command_buffer, p.binding.buffer, arguments,
-                                                   p.source.buffer, count, ind->max_count, ind->stride);
-                }
-            } else {
-                if (ind->kind == IndirectKind::draw) {
-                    vk.draw_indirect(command_buffer, p.binding.buffer, arguments, ind->max_count, ind->stride);
-                } else if (ind->kind == IndirectKind::draw_indexed) {
-                    vk.draw_indexed_indirect(command_buffer, p.binding.buffer, arguments, ind->max_count, ind->stride);
-                } else if (ind->kind == IndirectKind::dispatch) {
-                    for (std::uint32_t k = 0; k < ind->max_count; ++k) {
-                        vk.dispatch_indirect(command_buffer, p.binding.buffer,
-                                             arguments + VkDeviceSize(k) * ind->stride);
-                    }
-                }
-            }
+        } else if (const auto* ind = std::get_if<ExecuteIndirect>(&command); ind && !ind->state) {
+            detail::emit_indirect(vk, command_buffer, p, *ind);
         } else if (const auto* build = std::get_if<BuildAccelerationStructure>(&command); build && vk.xdxr_record) {
             vk.xdxr_record(command_buffer, *build);
         } else if (const auto* build = std::get_if<BuildAccelerationStructure>(&command)) {
@@ -3025,7 +3048,7 @@ inline void emit(const PreparedList& prepared, VkCommandBuffer command_buffer, c
                                         &p.pipeline.bindless_set, 0, nullptr);
             vk.push_constants(command_buffer, p.pipeline.layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(data), &data);
             vk.dispatch(command_buffer, dispatch->x, dispatch->y, dispatch->z);
-        } else if (const auto* draw = std::get_if<Draw>(&command)) {
+        } else if (const Draw* draw = detail::draw_of(command)) {
             auto& prepared_draw = const_cast<detail::Prepared&>(p);
             constexpr VkAccessFlags color_access =
                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
@@ -3097,8 +3120,10 @@ inline void emit(const PreparedList& prepared, VkCommandBuffer command_buffer, c
                 vk.bind_vertex_buffers2(command_buffer, slot, 1, &p.vertex_buffers[slot], &p.vertex_offsets[slot],
                                         &p.vertex_sizes[slot], &p.vertex_strides[slot]);
             }
-            if (draw->indexed) {
-                vk.bind_index_buffer(command_buffer, p.index_buffer, p.index_offset, p.index_type);
+            if (draw->indexed) vk.bind_index_buffer(command_buffer, p.index_buffer, p.index_offset, p.index_type);
+            if (const auto* indirect = std::get_if<ExecuteIndirect>(&command)) {
+                detail::emit_indirect(vk, command_buffer, p, *indirect);  // the arguments hold the counts
+            } else if (draw->indexed) {
                 vk.draw_indexed(command_buffer, draw->count, draw->instances, draw->first, draw->base_vertex,
                                 draw->first_instance);
             } else {

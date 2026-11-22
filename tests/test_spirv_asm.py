@@ -126,6 +126,43 @@ class SpirvAsmUnitTests(unittest.TestCase):
         self.assertIn(0x80000000, words)
         self.assertIn(0x3FC00000, words)  # 0x1.8p+0 = 1.5f
 
+    def test_decimal_f16_and_f32_constant_words(self):
+        for width, literal, expected in (
+            (32, "1.000000059604644775390625", 0x3F800000),  # exact halfway
+            (32, "1.0000000596046448", 0x3F800001),
+            (32, "-1.0000000596046448", 0xBF800001),
+            (32, "1.0000001788139343", 0x3F800001),
+            (32, "1e-45", 0x00000001),
+            (32, "-0.0", 0x80000000),
+            (32, "3.4028235e38", 0x7F7FFFFF),
+            (16, "1.0007", 0x3C00),
+            (16, "-1.0007", 0xBC00),
+            (16, "1.00097656", 0x3C01),  # f32 rounds up before f16 truncation
+            (16, "0.00000005960464", 0x0000),
+            (16, "0.0000000596046448", 0x0001),
+            (16, "0.000061005355", 0x03FF),
+            (16, "0.00006103515625", 0x0400),
+            (16, "-0.0", 0x8000),
+            (16, "65520", 0x7BFF),
+            (16, "65535.998", 0x7BFF),
+        ):
+            with self.subTest(width=width, literal=literal):
+                asm = f"%type = OpTypeFloat {width}\n%value = OpConstant %type {literal}\n"
+                spv = spirv_asm.assemble(asm)
+                self.assertEqual(struct.unpack_from("<I", spv, len(spv) - 4)[0], expected)
+
+    def test_decimal_f16_and_f32_overflow_is_rejected(self):
+        for width, literal in (
+            (16, "65535.998046875"),
+            (16, "-65536"),
+            (32, "3.4028236e38"),
+            (32, "-1e40"),
+        ):
+            with self.subTest(width=width, literal=literal):
+                asm = f"%type = OpTypeFloat {width}\n%value = OpConstant %type {literal}\n"
+                with self.assertRaisesRegex(spirv_asm.SpirvAsmError, f"line 2: .*f{width}.*range"):
+                    spirv_asm.assemble(asm)
+
     def test_hex_float_inf_nan_and_string_escapes_match_spirv_as(self):
         # Regression tests for PR #2251 review (@FreddyxS):
         # 1) Width-aware hex-float Inf and NaN payload spellings (f16, f32, f64).

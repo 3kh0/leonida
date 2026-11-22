@@ -21,6 +21,7 @@ import os
 import re
 import struct
 import sys
+from decimal import Decimal, InvalidOperation
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -147,11 +148,52 @@ def _parse_int(tok: str, lineno: int) -> int:
 
 
 _HEX_FLOAT_RE = re.compile(r"^([+-]?)0[xX]([0-9a-fA-F]*)(?:\.([0-9a-fA-F]*))?[pP]([+-]?\d+)$")
+_DECIMAL_FLOAT_RE = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _FLOAT_SPEC = {
     16: (5, 10, 15, "<e", "<H"),
     32: (8, 23, 127, "<f", "<I"),
     64: (11, 52, 1023, "<d", "<Q"),
 }
+
+
+def _decimal_f32_bits(value: Decimal) -> int:
+    """Round the exact decimal value directly to binary32, ties to even."""
+    sign = 0x80000000 if value.is_signed() else 0
+    if not value or value.adjusted() < -46:
+        return sign
+    if value.adjusted() > 38:
+        return sign | 0x7F800000
+
+    numerator, denominator = value.copy_abs().as_integer_ratio()
+    exponent = numerator.bit_length() - denominator.bit_length()
+    if numerator << max(0, -exponent) < denominator << max(0, exponent):
+        exponent -= 1
+    # The smallest normal exponent also sets the quantum for subnormals.
+    exponent = max(exponent, -126)
+    shift = 23 - exponent
+    denominator <<= max(0, -shift)
+    significand, remainder = divmod(numerator << max(0, shift), denominator)
+    twice_remainder = 2 * remainder
+    if twice_remainder > denominator or (twice_remainder == denominator and significand & 1):
+        significand += 1
+    # Adding the full significand incorporates its implicit leading bit and handles a rounding carry.
+    bits = ((exponent + 126) << 23) + significand
+    return sign | min(bits, 0x7F800000)
+
+
+def _f32_to_f16_toward_zero(bits: int) -> int:
+    """Narrow a binary32 intermediate as spirv-as does for decimal f16."""
+    sign = (bits >> 16) & 0x8000
+    exponent = ((bits >> 23) & 0xFF) - 127
+    fraction = bits & 0x7FFFFF
+    if exponent > 15:
+        return sign | 0x7C00
+    if exponent < -24:
+        return sign
+    if exponent < -14:
+        significand = (1 << 23) | fraction
+        return sign | (significand >> (-exponent - 1))
+    return sign | ((exponent + 15) << 10) | (fraction >> 13)
 
 
 def _parse_float_bits(tok: str, width: int, lineno: int) -> int:
@@ -195,6 +237,17 @@ def _parse_float_bits(tok: str, width: int, lineno: int) -> int:
             return (sign << (exp_bits + mant_bits)) | (exp_max << mant_bits)
         except ValueError as exc:
             raise SpirvAsmError(f"line {lineno}: invalid float literal {tok!r}") from exc
+    if width in (16, 32) and _DECIMAL_FLOAT_RE.fullmatch(tok):
+        try:
+            bits = _decimal_f32_bits(Decimal(tok))
+        except InvalidOperation as exc:
+            raise SpirvAsmError(f"line {lineno}: invalid float literal {tok!r}") from exc
+        if width == 16:
+            bits = _f32_to_f16_toward_zero(bits)
+        infinity = exp_max << mant_bits
+        if bits & infinity == infinity:
+            raise SpirvAsmError(f"line {lineno}: decimal f{width} literal {tok!r} out of range")
+        return bits
     try:
         fv = float(tok)
     except ValueError as exc:

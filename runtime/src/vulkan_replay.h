@@ -784,6 +784,8 @@ struct ReplayFunctions {
     PFN_vkCmdDispatchIndirect dispatch_indirect = nullptr;
     // multiDrawIndirect: one vkCmdDraw*Indirect may take a drawCount above 1; without it each command is its own call.
     bool multi_draw_indirect = false;
+    // VkPhysicalDeviceLimits::maxDrawIndirectCount: a call takes at most this many records.
+    std::uint32_t max_draw_indirect_count = UINT32_MAX;
     // Optional VK_KHR_acceleration_structure: BuildRaytracingAccelerationStructure.
     PFN_vkCmdBuildAccelerationStructuresKHR build_acceleration_structures = nullptr;
     // XDXR BVH4 builds (xdxr_build.h), used instead of the KHR ones when set: `xdxr_check` refuses inputs the builder
@@ -1670,15 +1672,17 @@ inline void emit_indirect(const ReplayFunctions& vk, VkCommandBuffer command_buf
         return;
     }
     // Without multiDrawIndirect a call draws one command: loop over them.
-    const std::uint32_t per_call = vk.multi_draw_indirect ? ind.max_count : 1;
+    // and a call takes at most maxDrawIndirectCount records.
+    const std::uint32_t per_call =
+        vk.multi_draw_indirect ? std::max<std::uint32_t>(1, std::min(ind.max_count, vk.max_draw_indirect_count)) : 1;
     if (ind.kind == IndirectKind::draw) {
         for (std::uint32_t k = 0; k < ind.max_count; k += per_call)
-            vk.draw_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride, per_call,
-                             ind.stride);
+            vk.draw_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride,
+                             std::min(per_call, ind.max_count - k), ind.stride);
     } else if (ind.kind == IndirectKind::draw_indexed) {
         for (std::uint32_t k = 0; k < ind.max_count; k += per_call)
             vk.draw_indexed_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride,
-                                     per_call, ind.stride);
+                                     std::min(per_call, ind.max_count - k), ind.stride);
     } else if (ind.kind == IndirectKind::dispatch) {
         for (std::uint32_t k = 0; k < ind.max_count; ++k)
             vk.dispatch_indirect(command_buffer, p.binding.buffer, arguments + VkDeviceSize(k) * ind.stride);
@@ -2272,6 +2276,7 @@ ReplayResult prepare(const CommandList& list, Resolve&& resolve, const ReplayFun
                     (ind->kind == IndirectKind::dispatch && !vk.dispatch_indirect))
                     return ReplayResult::unsupported;
             }
+            if (ind->kind != IndirectKind::dispatch && !ind->state && !ind->raw) return ReplayResult::unsupported;
             // A draw with the list's graphics state: prepared as a Draw is (the argument and count buffers stay in
             // p.binding and p.source).
             if (ind->state)

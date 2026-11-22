@@ -59,6 +59,35 @@ def run_word(body):
     return si.run_fragment(HEADER + body + "OpStore %out %res\n" + FOOTER)["%out"][0]
 
 
+POINTER_HEADER = """\
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %out
+OpExecutionMode %main OriginUpperLeft
+OpDecorate %out Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%v3uint = OpTypeVector %uint 3
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%seven = OpConstant %uint 7
+%nine = OpConstant %uint 9
+%array = OpTypeArray %uint %one
+%record = OpTypeStruct %array
+%null_array = OpConstantNull %array
+%initial = OpConstantComposite %record %null_array
+%source = OpConstantComposite %array %seven
+%ptr_record = OpTypePointer Function %record
+%ptr_array = OpTypePointer Function %array
+%ptr_word = OpTypePointer Function %uint
+%ptr_out = OpTypePointer Output %v3uint
+%out = OpVariable %ptr_out Output
+%main = OpFunction %void None %fn
+%entry = OpLabel
+"""
+
+
 class InterpreterTests(unittest.TestCase):
     def test_bitfield_extract(self):
         # SPIR-V: Count 0 gives 0; SExtract replicates the field's top bit; UExtract zero-extends.
@@ -464,6 +493,86 @@ class InterpreterTests(unittest.TestCase):
                                   "OpStore %p %cF0\n"
                                   "%q = OpAccessChain %_ptr_Function_uint %arr_v %c2\n"
                                   "%res = OpLoad %uint %q\n"), 0xFFFFFFF0)
+
+    def test_function_element_pointer_survives_aggregate_store(self):
+        for destination, value in (("%root", "%new_record"), ("%member", "%new_array")):
+            with self.subTest(destination=destination):
+                body = f"""\
+%root = OpVariable %ptr_record Function %initial
+%member = OpAccessChain %ptr_array %root %zero
+%old = OpAccessChain %ptr_word %member %zero
+%new_array = OpCompositeConstruct %array %seven
+%new_record = OpCompositeConstruct %record %new_array
+OpStore {destination} {value}
+%fresh = OpAccessChain %ptr_word %root %zero %zero
+%old_read = OpLoad %uint %old
+%fresh_read = OpLoad %uint %fresh
+OpStore %old %nine
+%stored = OpLoad %record %root
+%written = OpCompositeExtract %uint %stored 0 0
+%result = OpCompositeConstruct %v3uint %old_read %fresh_read %written
+OpStore %out %result
+"""
+                self.assertEqual(si.run_fragment(POINTER_HEADER + body + FOOTER)["%out"], (7, 7, 9))
+
+    def test_function_element_pointer_survives_repeated_store_of_same_value(self):
+        body = """\
+%dst = OpVariable %ptr_array Function
+%seed = OpVariable %ptr_array Function %source
+%value = OpLoad %array %seed
+OpStore %dst %value
+%old = OpAccessChain %ptr_word %dst %zero
+OpStore %dst %value
+%fresh = OpAccessChain %ptr_word %dst %zero
+%old_read = OpLoad %uint %old
+OpStore %old %nine
+%fresh_read = OpLoad %uint %fresh
+%stored = OpLoad %array %dst
+%written = OpCompositeExtract %uint %stored 0
+%result = OpCompositeConstruct %v3uint %old_read %fresh_read %written
+OpStore %out %result
+"""
+        self.assertEqual(si.run_fragment(POINTER_HEADER + body + FOOTER)["%out"], (7, 9, 9))
+
+    def test_workgroup_element_atomic_after_aggregate_store(self):
+        text = """\
+OpCapability Shader
+OpCapability Int64
+OpCapability PhysicalStorageBufferAddresses
+OpMemoryModel PhysicalStorageBuffer64 GLSL450
+OpEntryPoint GLCompute %main "main" %shared
+OpExecutionMode %main LocalSize 1 1 1
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%ulong = OpTypeInt 64 0
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%two = OpConstant %uint 2
+%seven = OpConstant %uint 7
+%addr = OpConstant %ulong 4096
+%addr_next = OpConstant %ulong 4100
+%array = OpTypeArray %uint %one
+%replacement = OpConstantComposite %array %seven
+%ptr_array = OpTypePointer Workgroup %array
+%ptr_word = OpTypePointer Workgroup %uint
+%ptr_psb = OpTypePointer PhysicalStorageBuffer %uint
+%shared = OpVariable %ptr_array Workgroup
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%old = OpAccessChain %ptr_word %shared %zero
+OpStore %shared %replacement
+%before = OpAtomicIAdd %uint %old %two %zero %two
+%fresh = OpAccessChain %ptr_word %shared %zero
+%after = OpAtomicLoad %uint %fresh %two %zero
+%out = OpConvertUToPtr %ptr_psb %addr
+%out_next = OpConvertUToPtr %ptr_psb %addr_next
+OpStore %out %before Aligned 4
+OpStore %out_next %after Aligned 4
+"""
+        memory = {}
+        si.run_fragment(text + FOOTER, memory=memory)
+        self.assertEqual(memory, {4096: 7, 4100: 9})
 
     def test_unsupported_constructs_are_rejected(self):
         for body in ("%res = OpUDiv %uint %c2 %c1\n",                                     # opcode not modelled

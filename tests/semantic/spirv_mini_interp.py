@@ -443,7 +443,7 @@ def _invocation(text, inputs, push_constants, memory, step=False):
     ptr_types = {}              # pointer type id -> (storage class, pointee type id)
     var_class = {}              # variable id -> storage class
     var_box = {}                # variable id -> [value]
-    pointers = {}               # id -> (container list, index) / ("pc", offset) / ("psb", address)
+    pointers = {}               # id -> (root box, index path) / ("pc", offset) / ("psb", address)
     id_type = {}                # constant / result id -> its type id (the width of a signed comparison)
     pc_type = {}                # id -> pointee type id of a PushConstant pointer
     in_body = False
@@ -550,7 +550,7 @@ def _invocation(text, inputs, push_constants, memory, step=False):
                     outputs.append(res)
             else:
                 raise UnsupportedConstruct(f"storage class {cls}")
-            pointers[res] = ("pc", 0) if cls == "PushConstant" else (var_box[res], 0)
+            pointers[res] = ("pc", 0) if cls == "PushConstant" else (var_box[res], (0,))
         else:
             raise UnsupportedConstruct(f"{op} in module header")
     if not in_body:
@@ -558,8 +558,23 @@ def _invocation(text, inputs, push_constants, memory, step=False):
     check_structure(body)
 
     def deref(p):
-        box, i = p
-        return box[i]
+        value, path = p
+        for idx in path:
+            value = value[idx]
+        return value
+
+    def store_local(p, value):
+        container, path = p
+        parents = []
+        for idx in path[:-1]:
+            parents.append((container, idx))
+            container = container[idx]
+        idx = path[-1]
+        # Composite instructions can produce tuples. Rebuild any immutable parents up to a writable slot.
+        while isinstance(container, tuple):
+            value = container[:idx] + (value,) + container[idx + 1:]
+            container, idx = parents.pop()
+        container[idx] = value
 
     def psb_word(addr):
         """The flat memory holds one 32-bit word per 4-byte-aligned byte address. Another address is undefined
@@ -677,7 +692,7 @@ def _invocation(text, inputs, push_constants, memory, step=False):
                 raise UnsupportedConstruct("non-Function variable in body")
             var_box[res] = [list(values[a[2]]) if len(a) > 2 and isinstance(values[a[2]], list)
                             else (values[a[2]] if len(a) > 2 else types.zero(pointee))]
-            pointers[res] = (var_box[res], 0)
+            pointers[res] = (var_box[res], (0,))
         elif op == "OpAccessChain":
             base = a[1]
             if base not in pointers:
@@ -701,13 +716,18 @@ def _invocation(text, inputs, push_constants, memory, step=False):
                     raise UnsupportedConstruct(f"physical-storage-buffer access chain into {types.t[elem][0]}")
                 pointers[res] = ("psb", p[1] + stride * values[a[2]])
                 continue
+            # Check the access against the current value, then keep the path so replacement of any ancestor
+            # cannot detach this pointer from its storage.
+            root, path = p
+            container = deref(p)
+            indices = []
             for idx_id in a[2:]:
                 idx = values[idx_id]
-                container = deref(p)
                 if not isinstance(container, (list, tuple)) or not 0 <= idx < len(container):
                     raise UnsupportedConstruct("OpAccessChain into non-array or out of range")
-                p = (container, idx)
-            pointers[res] = p
+                indices.append(idx)
+                container = container[idx]
+            pointers[res] = (root, path + tuple(indices))
         elif op == "OpLoad":
             p = pointers[a[1]]
             if p[0] == "pc":
@@ -731,7 +751,7 @@ def _invocation(text, inputs, push_constants, memory, step=False):
                     raise UnsupportedConstruct("PhysicalStorageBuffer store of a value that is not a 32-bit integer")
                 memory[psb_word(p[1])] = v
             else:
-                p[0][p[1]] = val(a[1])
+                store_local(p, val(a[1]))
         elif op in _ATOMICS:
             # One invocation, so an atomic is read, combine, write; the result is the original value (SPIR-V spec,
             # 3.42.18). Operands: result type, pointer, scope, semantics(, unequal semantics), value(, comparator).
@@ -762,7 +782,7 @@ def _invocation(text, inputs, push_constants, memory, step=False):
             if p[0] == "psb":
                 memory[p[1]] = new & MASK
             else:
-                p[0][p[1]] = new & MASK
+                store_local(p, new & MASK)
             values[res] = old
         elif op == "OpSelect":
             if not isinstance(val(a[1]), bool):

@@ -10,6 +10,7 @@ name is accepted under one of two rules:
               numbers. The base must be made of common tokens (each in at least ``--min-token`` dictionary words), and
               at least one member must be a dictionary word itself.
 
+An id shared by two exact dialogue words is left unnamed. The bank has no spelling to distinguish them.
 Every run repeats the attack with a salt prepended to each word (``zq``): those names cannot be right, so their
 accepted count estimates the false names. Per source, the dialogue rule is kept only if its control is under 2% of
 its real count, and the family rule uses the smallest family size whose control is under 2%.
@@ -27,7 +28,12 @@ include their parent paths in report labels so they can be selected separately w
 
 Usage:
     python -I awc_names.py <banks> [<banks> ...] (--words FILE | --conversations PATH) [...]
-                           [--min-token N] [--out names.csv|.json]
+                           [--min-token N] [--ambiguity] [--out names.csv|.json]
+
+`--ambiguity` adds counts to stdout for unsalted exact dialogue candidates. Repeated inputs count once
+per occurrence beyond the first spelling after trimming and lowercasing. Conflicts count distinct 29-bit
+IDs shared by different normalized names. Each source reports affected IDs and distinct (bank, ID) pairs,
+and IDs with no exact dialogue candidate. These counts precede family matching and control filtering.
 
 A JSON inventory from ``awc_manifest.py`` can also supply the bank names and stream IDs.
 
@@ -214,6 +220,21 @@ class Dictionary:
         return sorted(b for b in {TRAILING_NUMBER.sub("", w) for w in self.words} if self.wordy(b, min_token))
 
 
+def dialogue_ambiguity(words, dictionary):
+    """Count duplicate occurrences separately from hash conflicts among unique exact words."""
+    exact_count = sum(bool(DIALOGUE.match(w.strip().lower())) for w in words)
+    candidate_ids = set()
+    conflicts = set()
+    for word in dictionary.words:
+        if DIALOGUE.match(word):
+            exact_count -= 1
+            stream_id = joaat(word) & M29
+            if stream_id in candidate_ids:
+                conflicts.add(stream_id)
+            candidate_ids.add(stream_id)
+    return exact_count, candidate_ids, conflicts
+
+
 # ---- attack ----
 def family_ok(names) -> bool:
     """At least 3 members, or 2 with adjacent numbers (_01/_02); chance hits rarely land on adjacent numbers."""
@@ -229,12 +250,19 @@ def family_ok(names) -> bool:
 def _attack_split(dictionary: Dictionary, bases: list, index: Index, salt: str) -> tuple:
     """Separate dialogue and best family hits per (bank number, id) before control filtering."""
     dialogue_hits = {}
+    ambiguous_ids = set()
     for w in dictionary.words:
         if DIALOGUE.match(w):
             name = salt + w
             h = joaat(name) & M29
             for b in index.by_id.get(h, ()):
-                dialogue_hits[(b, h)] = (name, "dialogue", 99)
+                if (b, h) in dialogue_hits:
+                    ambiguous_ids.add(h)
+                else:
+                    dialogue_hits[(b, h)] = (name, "dialogue", 99)
+    for h in ambiguous_ids:
+        for b in index.by_id[h]:
+            del dialogue_hits[(b, h)]
     suffix_bytes = [_enc(s) for s in SUFFIXES]
     families = collections.defaultdict(dict)     # (bank, base) -> {id: (name, verbatim)}
     by_id = index.by_id
@@ -243,7 +271,7 @@ def _attack_split(dictionary: Dictionary, bases: list, index: Index, salt: str) 
         for s, sb in zip(SUFFIXES, suffix_bytes):
             i = joaat_finish(joaat_state(sb, state)) & M29
             banks = by_id.get(i)
-            if banks:
+            if banks and i not in ambiguous_ids:
                 verbatim = (base + s) in dictionary.wordset
                 for b in banks:
                     families[(b, base)][i] = (salt + base + s, verbatim)
@@ -346,6 +374,8 @@ def main(argv=None) -> int:
     ap.add_argument("--min-token", type=positive_int, default=MIN_TOKEN,
                     help="dictionary words a family base token must appear in (default 5, at least 1)")
     ap.add_argument("--out", help="names.csv or names.json; default is a summary only")
+    ap.add_argument("--ambiguity", action="store_true",
+                    help="print aggregate exact dialogue collision and inventory counts")
     a = ap.parse_args(argv)
     if not a.words and not a.conversations:
         ap.error("give at least one --words or --conversations source")
@@ -372,12 +402,16 @@ def main(argv=None) -> int:
             print(f"awc_names: error: cannot read {path}: {error}", file=sys.stderr)
             return 2
     waves = conversation_waves(a.conversations)
-    dictionary = Dictionary(words + waves)
+    words.extend(waves)
+    dictionary = Dictionary(words)
     bases = dictionary.bases(a.min_token)
     print(f"{len(dictionary.words)} words ({len(waves)} dialogue waves from conversations), "
           f"{len(bases)} family bases", flush=True)
 
     rows, summary = [], {}
+    if a.ambiguity:
+        duplicates, candidate_ids, conflicts = dialogue_ambiguity(words, dictionary)
+        print(f"Exact dialogue: {duplicates} repeated inputs, {len(conflicts)} conflicting IDs")
     labels = source_labels(a.banks)
     for source in a.banks:
         try:
@@ -388,6 +422,12 @@ def main(argv=None) -> int:
         index = Index(banks)
         found, stats = name_source(dictionary, bases, index)
         label = labels[source]
+        if a.ambiguity:
+            affected = conflicts.intersection(index.by_id)
+            pairs = sum(len(index.by_id[i]) for i in affected)
+            absent = sum(i not in candidate_ids for i in index.by_id)
+            print(f"{label}: {len(affected)} conflicting IDs present in {pairs} bank/ID pairs, "
+                  f"{absent} IDs without an exact dialogue candidate")
         summary[label] = stats
         for (b, i), (name, rule, _k) in sorted(found.items()):
             rows.append({"source": label, "bank": index.labels[b], "stream_id": f"{i:08x}", "name": name,

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -170,6 +171,18 @@ class TestRules(unittest.TestCase):
         self.assertEqual(stats["family_min_size"], 2)
         self.assertEqual(stats["control_dialogue"] + stats["control_family"], 0)
 
+    def test_colliding_dialogue_words_leave_shared_id_unnamed(self):
+        first, second = "synthetic38378au_abcd_01", "synthetic42901au_abcd_01"
+        self.assertEqual(A.joaat(first) & A.M29, A.joaat(second) & A.M29)
+        base = first[:-3]
+        siblings = [base + "_02", base + "_03"]
+        unique = "uniqueau_abcd_01"
+        d = A.Dictionary([first, second, unique, *siblings])
+        index = self.index({"music": [first, second, unique, *siblings], "other": [first]})
+        found, _ = A.name_source(d, [base], index)
+        self.assertEqual({key: value[0] for key, value in found.items()},
+                         {(0, A.joaat(w) & A.M29): w for w in [unique, *siblings]})
+
     def test_rejected_dialogue_hit_does_not_shadow_accepted_family_member(self):
         d = A.Dictionary(["zz_fooau_abcd_01"])
         bases = ["zz_fooau_abcd"]
@@ -209,6 +222,33 @@ class TestConversations(unittest.TestCase):
 
 
 class TestCli(unittest.TestCase):
+    def test_ambiguity_counts_normalized_candidates_and_affected_bank_ids(self):
+        first, second = "synthetic38378au_abcd_01", "synthetic42901au_abcd_01"
+        unique = "uniqueau_abcd_01"
+        with tempfile.TemporaryDirectory() as tmp:
+            banks = os.path.join(tmp, "banks")
+            os.mkdir(banks)
+            write(os.path.join(banks, "one.awc"), make_bank([first, first, unique], extra_ids=[123]))
+            write(os.path.join(banks, "two.awc"), make_bank([first], extra_ids=[123]))
+            other = write(os.path.join(tmp, "other.awc"), make_bank([unique]))
+            words = write(os.path.join(tmp, "words.json"),
+                          json.dumps([first, second, unique, "  " + unique.upper(), "noise", "NOISE"]))
+            output = os.path.join(tmp, "names.csv")
+            cli = [sys.executable, "-I", A.__file__, banks, other, "--words", words, "--out", output]
+            default = subprocess.run(cli, check=True, capture_output=True, text=True)
+            with open(output, "rb") as fh:
+                expected = fh.read()
+            diagnostic = subprocess.run([*cli, "--ambiguity"], check=True, capture_output=True, text=True)
+            self.assertNotIn("conflicting IDs", default.stdout)
+            self.assertIn("Exact dialogue: 1 repeated inputs, 1 conflicting IDs", diagnostic.stdout)
+            self.assertIn("banks: 1 conflicting IDs present in 2 bank/ID pairs, "
+                          "1 IDs without an exact dialogue candidate", diagnostic.stdout)
+            self.assertIn("other.awc: 0 conflicting IDs present in 0 bank/ID pairs, "
+                          "0 IDs without an exact dialogue candidate", diagnostic.stdout)
+            with open(output, "rb") as fh:
+                self.assertEqual(fh.read(), expected)
+            self.assertEqual([r["name"] for r in csv.DictReader(expected.decode().splitlines())], [unique, unique])
+
     def test_sources_with_same_basename_keep_separate_summaries_and_streams(self):
         with tempfile.TemporaryDirectory() as tmp:
             sources = []

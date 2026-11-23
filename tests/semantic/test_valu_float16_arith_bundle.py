@@ -106,6 +106,25 @@ class TestVAddF16ReferenceOracle(unittest.TestCase):
         res = oracle_v_add_f16(0x3c00, 0x4000)
         self.assertEqual(res, 0x4200)
 
+class TestVAddF16ASTAndInterpreter(unittest.TestCase):
+    """Stage 2 for v_add_f16: AST and deterministic scalar interpreter execution."""
+
+    def test_v_add_f16_ast_and_execution(self):
+        lines = [
+            "v_mov_b32 v1, 0x3c00",
+            "v_mov_b32 v2, 0x4000",
+            "v_add_f16 v0, v1, v2",
+            "v_mov_b32 v1, 0",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+            "exp mrt0 v0, v1, v2, v3 done vm",
+            "s_endpgm",
+        ]
+        spv = support.translate_lines("ps_ast_v_add_f16", lines)
+        self.assertIn("OpFAdd", spv)
+        words = support.mrt0_words(spv)
+        self.assertEqual(words[0] & 0xFFFF, 0x4200)
+
 
 if __name__ == '__main__':
     unittest.main()

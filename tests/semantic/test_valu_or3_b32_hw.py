@@ -85,6 +85,91 @@ class TestReferenceOracleAndTranslator(unittest.TestCase):
         ])
         self.assertEqual(words[0], 0x12345678)
 
+class RegType(Enum):
+    VGPR = auto()
+    SGPR = auto()
+    LITERAL = auto()
+
+
+@dataclass(frozen=True)
+class Operand:
+    reg_type: RegType
+    index: int = 0
+    literal_val: int = 0
+
+    def __post_init__(self):
+        if self.reg_type == RegType.VGPR and not (0 <= self.index <= 255):
+            raise ValueError(f"VGPR index {self.index} out of bounds [0, 255]")
+        if self.reg_type == RegType.SGPR and not (0 <= self.index <= 105):
+            raise ValueError(f"SGPR index {self.index} out of bounds [0, 105]")
+
+    @classmethod
+    def vgpr(cls, idx: int) -> Operand:
+        return cls(RegType.VGPR, index=idx)
+
+    @classmethod
+    def sgpr(cls, idx: int) -> Operand:
+        return cls(RegType.SGPR, index=idx)
+
+    @classmethod
+    def literal(cls, val: int) -> Operand:
+        return cls(RegType.LITERAL, literal_val=val & MASK32)
+
+    def to_asm(self) -> str:
+        if self.reg_type == RegType.VGPR:
+            return f"v{self.index}"
+        elif self.reg_type == RegType.SGPR:
+            return f"s{self.index}"
+        else:
+            return f"{self.literal_val:#x}"
+
+
+@dataclass(frozen=True)
+class VOr3B32Instruction:
+    dst: Operand
+    src0: Operand
+    src1: Operand
+    src2: Operand
+
+    def __post_init__(self):
+        if self.dst.reg_type != RegType.VGPR:
+            raise TypeError("Destination must be a VGPR for VALU instruction v_or3_b32")
+
+    def to_asm(self) -> str:
+        return f"v_or3_b32 {self.dst.to_asm()}, {self.src0.to_asm()}, {self.src1.to_asm()}, {self.src2.to_asm()}"
+
+
+class TestSymbolicAST(unittest.TestCase):
+    def test_ast_construction_and_formatting(self):
+        insn = VOr3B32Instruction(
+            dst=Operand.vgpr(3),
+            src0=Operand.vgpr(0),
+            src1=Operand.sgpr(4),
+            src2=Operand.literal(0x12345678),
+        )
+        self.assertEqual(insn.to_asm(), "v_or3_b32 v3, v0, s4, 0x12345678")
+
+    def test_ast_immutability(self):
+        insn = VOr3B32Instruction(
+            dst=Operand.vgpr(3),
+            src0=Operand.vgpr(0),
+            src1=Operand.vgpr(1),
+            src2=Operand.vgpr(2),
+        )
+        with self.assertRaises(Exception):
+            insn.dst = Operand.vgpr(4)  # type: ignore
+
+    def test_ast_validation_errors(self):
+        with self.assertRaises(TypeError):
+            VOr3B32Instruction(
+                dst=Operand.sgpr(3),
+                src0=Operand.vgpr(0),
+                src1=Operand.vgpr(1),
+                src2=Operand.vgpr(2),
+            )
+        with self.assertRaises(ValueError):
+            Operand.vgpr(300)
+
 
 if __name__ == "__main__":
     unittest.main()

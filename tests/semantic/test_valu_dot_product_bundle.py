@@ -526,5 +526,17 @@ class VDot8U32U4AstInterpreterTests(unittest.TestCase):
         # 8 * 2 + 14 = 30
         self.assertEqual(regs["v3"], 30)
 
+class VDot8U32U4SimdBoundaryTests(unittest.TestCase):
+    """SIMD lane divergence and boundary extremes for v_dot8_u32_u4."""
+
+    def test_simd_divergent_lanes(self):
+        lanes = 64
+        src0 = [0x11111111 for _ in range(lanes)]
+        src1 = [0x22222222 for _ in range(lanes)]
+        accs = [i * 2 for i in range(lanes)]
+        out = [ref_dot8_u32_u4(s0, s1, acc) for s0, s1, acc in zip(src0, src1, accs)]
+        for i in range(lanes):
+            self.assertEqual(out[i], 16 + i * 2)
+
 if __name__ == "__main__":
     unittest.main()

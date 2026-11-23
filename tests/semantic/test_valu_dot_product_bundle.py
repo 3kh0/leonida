@@ -272,5 +272,22 @@ class VDot2cF32F16TranslatorIntegrationTests(unittest.TestCase):
         res_no_accum = ref_dot2_f32_f16(s0, s1, 0)
         self.assertNotEqual(res_accum, res_no_accum)
 
+class VDot4I32I8OracleTests(unittest.TestCase):
+    """Reference mathematical oracle tests for v_dot4_i32_i8."""
+
+    def test_positive_bytes(self):
+        s0 = 0x01020304
+        s1 = 0x02020202
+        # 4*2 + 3*2 + 2*2 + 1*2 = 8 + 6 + 4 + 2 = 20
+        res = ref_dot4_i32_i8(s0, s1, 5)
+        self.assertEqual(res, 25)
+
+    def test_negative_signed_bytes(self):
+        s0 = 0xFFFFFFFF  # four -1 bytes
+        s1 = 0x01010101  # four +1 bytes
+        # 4 * (-1) = -4
+        res = ref_dot4_i32_i8(s0, s1, 0)
+        self.assertEqual(i32(res), -4)
+
 if __name__ == "__main__":
     unittest.main()

@@ -219,6 +219,19 @@ class MainTests(unittest.TestCase):
         self.assertEqual(self.types(), {"overall": {}, "per_archive": {}})
         self.assertIn("0 classes in total", out)
 
+    def test_index_saved_with_a_utf8_bom_still_classifies(self):
+        # Notepad's "UTF-8" writes the BOM, so a re-saved index.json must not read as invalid JSON.
+        path = os.path.join(self.archive("a", []), "index.json")
+        with open(path, "wb") as f:
+            f.write(b"\xef\xbb\xbf" + json.dumps({"files": [{"head": RBF0_HEAD, "size": 10}]}).encode("utf-8"))
+        proc = subprocess.run(
+            [sys.executable, "-I", os.path.join(ROOT, "tools", "classify_carve.py"), self.root],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("invalid JSON", proc.stderr)
+        self.assertEqual(counts(self.types()["overall"]["rbf0"]), {"files": 1, "bytes": 10})
+
     def test_types_json_uses_one_space_indent(self):
         self.archive("a", [{"head": RBF0_HEAD, "size": 1}])
         self.run_main()

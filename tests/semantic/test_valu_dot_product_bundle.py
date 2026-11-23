@@ -131,5 +131,37 @@ class VDot2F32F16OracleTests(unittest.TestCase):
         res = ref_dot2_f32_f16(s0, s1, 0)
         self.assertAlmostEqual(bits_to_f32(res), 2.0)
 
+@dataclasses.dataclass
+class DotAstNode:
+    opcode: str
+    dst: str
+    src0: str
+    src1: str
+    src2: Optional[str] = None
+
+    def emit_asm(self) -> str:
+        if self.src2 is not None:
+            return f"{self.opcode} {self.dst}, {self.src0}, {self.src1}, {self.src2}"
+        return f"{self.opcode} {self.dst}, {self.src0}, {self.src1}"
+
+
+class VDot2F32F16AstInterpreterTests(unittest.TestCase):
+    """AST modeling and interpreter simulation for v_dot2_f32_f16."""
+
+    def test_ast_emission(self):
+        node = DotAstNode("v_dot2_f32_f16", "v0", "v1", "v2", "v3")
+        self.assertEqual(node.emit_asm(), "v_dot2_f32_f16 v0, v1, v2, v3")
+
+    def test_interpreter_scalar_simulation(self):
+        regs = {
+            "v1": pack_f16x2(1.5, 2.0),
+            "v2": pack_f16x2(2.0, 3.0),
+            "v3": f32_to_bits(5.0),
+        }
+        res = ref_dot2_f32_f16(regs["v1"], regs["v2"], regs["v3"])
+        regs["v0"] = res
+        # 1.5*2 + 2*3 + 5 = 3 + 6 + 5 = 14.0
+        self.assertAlmostEqual(bits_to_f32(regs["v0"]), 14.0)
+
 if __name__ == "__main__":
     unittest.main()

@@ -191,6 +191,9 @@ struct VulkanDeviceInfo {
     // writes the layer or viewport declares ShaderLayer / ShaderViewportIndex (the index's `features`).
     bool shader_output_layer = false;
     bool shader_output_viewport_index = false;
+    // Vulkan 1.2 shaderBufferInt64Atomics enabled on `device`: rdna2spirv.py's 64-bit buffer and global atomics
+    // (swap_x2) declare Int64Atomics.
+    bool shader_buffer_int64_atomics = false;
     // The translator's output folder for pipeline creation. An empty value uses LEONIDA_SHADERS or the packaged path.
     std::string shader_dir;
     // VK_EXT_custom_border_color (with customBorderColors and customBorderColorWithoutFormat) is enabled on

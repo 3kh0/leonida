@@ -35,9 +35,28 @@ TOTAL = (len(check.COMPUTE) + 7 + len(check.CS_DUMPS) + len(check.W64X_DUMPS) + 
          + len(check.PIXEL_TESTS) + len(check.CLIP_TESTS) + len(check.BOUNDS) + len(check.GLOBAL_OFFSET)
          + len(check.MIP_TEST_PASSES) + len(check.GRADIENT_TESTS)
          + len(check.STORE_WORDS) + len(check.GET_LOD_TESTS)
-         + len(check.TEXTURE_CONSTANTS) + 14)  # three mesh fixtures, ps_tex, ps_imgatomic, five compute fixtures,
-         # ps_ssharp, vs_base_ids, main's standalone cs_fmt_d16_xyz / cs_heap_init dumps (net one more case) and cs_fmt_all
+         + len(check.TEXTURE_CONSTANTS) + 15)  # three mesh fixtures, ps_tex, ps_imgatomic, five compute fixtures,
+         # ps_ssharp, vs_base_ids, main's standalone cs_fmt_d16_xyz / cs_heap_init dumps (net one more case), cs_fmt_all
+         # and cs_w32_swap_x2_whole
 CVT = {bits: [u, s] for bits, u, s in check.CVT_F32_SAT_CASES}
+
+
+def swap_x2_whole_heap(tear=None):
+    """The heap cs_w32_swap_x2_whole leaves when the invocations swapped whole pairs in invocation order (each glc
+    swap gets back what the one before it put in). tear: a word whose lowest bit is then flipped."""
+    n = check.SWAP_X2_WHOLE_INVOCATIONS
+    words = [0xEEEEEEEE] * check.SWAP_X2_WHOLE_WORDS
+    for form in range(4):
+        held = (0xEEEEEEEE, 0xEEEEEEEE)
+        for i in range(n):
+            if form < 2:
+                words[2 * n * form + 2 * i: 2 * n * form + 2 * i + 2] = held
+            held = check.swap_x2_whole_pair(form, i)
+        e = check.SWAP_X2_WHOLE_ELEMENTS + 2 * form
+        words[e:e + 2] = held
+    if tear is not None:
+        words[tear] ^= 1
+    return words
 
 
 def words_output(name, flip=None):
@@ -84,6 +103,10 @@ class Wave64Checks(unittest.TestCase):
                 self.assertEqual((args, env["VKC_OUT_WORDS"]), (("1", "dump"), "192"))
                 Path(env["VKC_DUMP"]).write_bytes(GOOD_XY_XYZ if name == "cs_fmt_xy_xyz" else GOOD_TBUFFER_STORE)
                 return 0, "out[0..7] = 0 0 0 0 0 0 0 0\n"
+            if name == "cs_w32_swap_x2_whole":
+                self.assertEqual((args, env["VKC_OUT_WORDS"]), (("64", "dump"), str(check.SWAP_X2_WHOLE_WORDS)))
+                Path(env["VKC_DUMP"]).write_bytes(struct.pack(f"<{check.SWAP_X2_WHOLE_WORDS}I", *swap_x2_whole_heap()))
+                return 0, ""
             if name == "cs_fmt_all":
                 self.assertEqual((args, env["VKC_OUT_WORDS"]), (("1", "dump"), str(len(check.FMT_ALL_WORDS))))
                 Path(env["VKC_DUMP"]).write_bytes(struct.pack(f"<{len(check.FMT_ALL_WORDS)}I", *check.FMT_ALL_WORDS))
@@ -256,6 +279,21 @@ class Wave64Checks(unittest.TestCase):
         status, out = self.run_checks(unsupported, unsupported, missing_ballot=True)
         self.assertEqual(status, 1, out)
         self.assertIn("missing cs_wave64_ballot.spv", out)
+
+
+class SwapX2WholeChecks(unittest.TestCase):
+    """swap_x2_whole_words: what makes the cs_w32_swap_x2_whole dispatch fail."""
+
+    def test_whole_swaps_pass(self):
+        self.assertEqual(check.swap_x2_whole_words(swap_x2_whole_heap()), "")
+
+    def test_a_torn_pair_fails(self):
+        n = check.SWAP_X2_WHOLE_INVOCATIONS
+        for word, form in ((2 * 100 + 1, "global glc"), (2 * n + 2 * 8, "buffer glc")):   # a returned pair's half
+            with self.subTest(form=form):
+                self.assertIn(form + ": 1 of", check.swap_x2_whole_words(swap_x2_whole_heap(word)))
+        final = check.SWAP_X2_WHOLE_ELEMENTS + 2 * 3                 # the element buffer_atomic_swap_x2 left
+        self.assertIn("buffer: the element ends as", check.swap_x2_whole_words(swap_x2_whole_heap(final)))
 
 
 class FloatToIntSweep(unittest.TestCase):

@@ -1,9 +1,10 @@
 """Value tests for RDNA2 global_atomic_{and,or,xor,swap}_x2, run through spirv_mini_interp on the CPU.
 
 M = op(M, DATA) on the 64-bit element at the global_* address (two dwords, low first); with glc the old 64 bits land in
-vdst[0:1]. The translator does one 32-bit atomic per dword, which leaves the same memory for a bitwise op, and for an
-exchange by one lane at a time (two lanes swapping into one element at once can tear it). The carrying and comparing
-_x2 forms stay Unsupported. Standard library only; no GPU, no game files.
+vdst[0:1]. The translator does one 32-bit atomic per dword for the bitwise ops, which leaves the same memory, and one
+64-bit exchange for swap (Int64Atomics); with --no-int64-atomics swap is one 32-bit exchange per dword, exact for one
+lane at a time (two lanes swapping into one element at once can tear it). The carrying and comparing _x2 forms stay
+Unsupported. Standard library only; no GPU, no game files.
 """
 import os
 import random
@@ -59,6 +60,16 @@ class GlobalAtomicsX2(unittest.TestCase):
             kind, m, d = rng.choice(list(MODEL)), rng.getrandbits(64), rng.getrandbits(64)
             with self.subTest(op=kind, m=hex(m), d=hex(d)):
                 self.assertEqual(atomic_x2(kind, m, d), (split(m), split(MODEL[kind](m, d))))
+
+    def test_swap_without_int64_atomics(self):
+        m, d = 0x12345678_9ABCDEF0, 0xF0F0F0F0_0F0F0F0F
+        saved = rdna2spirv.INT64_ATOMICS
+        rdna2spirv.INT64_ATOMICS = False          # --no-int64-atomics: one 32-bit exchange per dword
+        try:
+            self.assertEqual(atomic_x2("swap", m, d), (split(m), split(d)))
+            self.assertEqual(atomic_x2("swap", m, d, glc=False), ((0xDEAD, 0xBEEF), split(d)))
+        finally:
+            rdna2spirv.INT64_ATOMICS = saved
 
     def test_carrying_and_comparing_forms_rejected(self):
         for kind in ("add", "sub", "smin", "umax", "cmpswap"):

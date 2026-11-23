@@ -299,6 +299,24 @@ def test_cs_store_packed_atomic_pointers(make_shader):
         assert defs[index] == "OpConstant %uint 0"
 
 
+@pytest.mark.parametrize("int64_atomics", [True, False], ids=["int64-atomics", "no-int64-atomics"])
+def test_swap_x2_is_one_64bit_exchange(make_shader, monkeypatch, int64_atomics):
+    """buffer/global swap_x2, with and without glc, swap the element whole: one 64-bit OpAtomicExchange each on a uint64
+    PhysicalStorageBuffer pointer, with Int64Atomics declared (SHADER-868). --no-int64-atomics keeps the fallback, one
+    32-bit exchange per dword, and declares no Int64Atomics."""
+    monkeypatch.setattr(rdna2spirv, "INT64_ATOMICS", int64_atomics)
+    with open(os.path.join(ROOT, "runtime", "test", "shaders", "cs_w32_swap_x2_whole.asm"), encoding="utf-8") as f:
+        shader = make_shader(f.read(), "cs_w32_swap_x2_whole", cs_header=(0x8088, (32, 1, 1)))
+    spvasm = shader.translate()
+    shader.validate(spvasm)
+    defs = dict(re.findall(r"^\s*(%\w+) = (Op[^\n]+)", spvasm, re.M))
+    wide = re.findall(r"= OpAtomicExchange %ulong (%\w+) ", spvasm)
+    narrow = re.findall(r"= OpAtomicExchange %uint ", spvasm)
+    assert (len(wide), len(narrow)) == ((4, 0) if int64_atomics else (0, 8))
+    assert all(defs[p].startswith("OpConvertUToPtr %_ptr_PSB_ulong ") for p in wide)
+    assert ("OpCapability Int64Atomics" in spvasm) == int64_atomics
+
+
 def test_compute_thread_group_size_sgpr_is_rejected(make_shader):
     """TG_SIZE_EN (RSRC2 bit 10) adds an SGPR the translator doesn't model."""
     shader = make_shader("s_endpgm\n", name="cs_test", cs_header=(0x8088 | 1 << 10, (64, 1, 1)))

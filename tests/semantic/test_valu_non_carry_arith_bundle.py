@@ -99,6 +99,16 @@ class TestVAddNcU32AST(unittest.TestCase):
         expr_cl = VAddNcU32Expr(MASK32, 10, clamp=True)
         self.assertEqual(expr_cl.eval(), MASK32)
 
+class TestVAddNcU32WrappingAndSaturation(unittest.TestCase):
+    def test_modular_wrapping_patterns(self) -> None:
+        for offset in (0, 1, 2, 0xFFFF, 0x10000):
+            res = ref_v_add_nc_u32(MASK32 - offset, offset + 1)
+            self.assertEqual(res, 0)
+
+    def test_saturation_extremes(self) -> None:
+        self.assertEqual(ref_v_add_nc_u32(0x80000000, 0x80000000, clamp=True), MASK32)
+        self.assertEqual(ref_v_add_nc_u32(0x80000000, 0x80000000, clamp=False), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

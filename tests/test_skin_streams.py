@@ -22,6 +22,7 @@ TOOL = os.path.join(ROOT, "tools", "skin_streams.py")
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import skin_streams as ss  # noqa: E402
+import report_paths  # noqa: E402
 
 
 class Page:
@@ -529,6 +530,21 @@ class TestCli(unittest.TestCase):
             self.assertEqual(r.stdout, "")
             with open(path, "rb") as fh:
                 self.assertEqual(fh.read(), data)
+
+    def test_json_with_an_equivalent_unicode_archive_name_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source, original = self._archive(tmp, "caf\u00e9.rpf")
+            output = os.path.join(tmp, "cafe\u0301.rpf")
+            stderr = io.StringIO()
+            with (mock.patch.object(report_paths, "case_insensitive_volume", return_value=True),
+                  mock.patch.object(ss, "scan_archive", wraps=ss.scan_archive) as scan,
+                  contextlib.redirect_stdout(io.StringIO()),
+                  contextlib.redirect_stderr(stderr)):
+                self.assertEqual(ss.main([source, "--json", output]), 2)
+            scan.assert_not_called()
+            self.assertIn("would overwrite the input", stderr.getvalue())
+            with open(source, "rb") as f:
+                self.assertEqual(f.read(), original)
 
     def test_json_that_is_a_directory_is_refused_before_the_scan(self):
         with tempfile.TemporaryDirectory() as tmp:

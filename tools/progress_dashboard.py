@@ -697,23 +697,40 @@ def collect_corpus(col, work):
         col.source("corpus", None, "missing", note="no <work>/shaders/dxbc/index.json (run make_game.py's shaders stage)")
         return
     carved = json.loads(read_utf8(carved_p))
-    entries = carved if isinstance(carved, list) else list(carved.values())
+    entries = ((None, e) for e in carved) if isinstance(carved, list) else carved.items()
     per_stage = {}
-    for e in entries:
+    carved_stages = {}
+    for key, e in entries:
         st = (e.get("stage") if isinstance(e, dict) else None) or "unknown"
         per_stage.setdefault(st, [0, 0])[0] += 1
+        if isinstance(e, dict):
+            # shader_carve.py gives each variant a unique file (e.g. name~1.dxbc); rdna2spirv.py keys
+            # its index by that file's stem. The original archive name is not necessarily unique.
+            filename = e.get("file") or key
+            stem = filename.removesuffix(".dxbc") if isinstance(filename, str) else e.get("name")
+            if isinstance(stem, str) and stem:
+                carved_stages[stem] = st
     validated_total = 0
     if os.path.isfile(spirv_p):
         spirv = json.loads(read_utf8(spirv_p))
-        for meta in spirv.values():
+        unmatched = mismatched = 0
+        for stem, meta in spirv.items():
+            if stem not in carved_stages:
+                unmatched += 1
+                continue
             if isinstance(meta, dict) and "error" not in meta:
                 st = meta.get("stage") or "unknown"
-                per_stage.setdefault(st, [0, 0])[1] += 1
+                if st != carved_stages[stem]:
+                    mismatched += 1
+                    continue
+                per_stage[st][1] += 1
                 validated_total += 1
-        col.source("corpus_spirv", "<work>/shaders/spirv/index.json", "ok", len(spirv))
+        note = (f"translated entries absent from the carve: {unmatched}; stage mismatches: {mismatched}"
+                if unmatched or mismatched else None)
+        col.source("corpus_spirv", "<work>/shaders/spirv/index.json", "ok", len(spirv), note=note)
     else:
         col.source("corpus_spirv", "<work>/shaders/spirv/index.json", "missing", note="translation not finished")
-    col.source("corpus_carved", "<work>/shaders/dxbc/index.json", "ok", len(entries))
+    col.source("corpus_carved", "<work>/shaders/dxbc/index.json", "ok", len(carved))
     for st, (n_carved, n_valid) in sorted(per_stage.items()):
         stage = str(st)
         if n_valid:
@@ -723,8 +740,9 @@ def collect_corpus(col, work):
         if rest:
             col.add(f"corpus.{stage}.not_validated", "corpus", stage, f"{stage}: not translated or rejected by spirv-val",
                     "failed", detail=f"{rest:,} of {n_carved:,} carved", weight=rest, count=rest)
-    col.metric("corpus.validated", "corpus", "Carved shaders that translate and pass spirv-val", validated_total, len(entries),
-               "entries in <work>/shaders/spirv/index.json without an error / entries in <work>/shaders/dxbc/index.json",
+    col.metric("corpus.validated", "corpus", "Carved shaders that translate and pass spirv-val", validated_total, len(carved),
+               "entries in <work>/shaders/dxbc/index.json with a matching filename stem and stage in "
+               "<work>/shaders/spirv/index.json without an error / entries in <work>/shaders/dxbc/index.json",
                note="validation is not execution: nothing here says a shader's output is right")
     col.notes.append("corpus: counts come from your own work folder; no shader name or path is stored")
 

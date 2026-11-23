@@ -277,9 +277,12 @@ def read_skin_streams(model_dir: str, model: dict, mesh: dict) -> dict:
     with open(buffer_path, "rb") as handle:
         blob = handle.read()
 
+    gfx_off = vertex_buffer.get("gfx_off", 0) or 0
+    if isinstance(gfx_off, bool) or (isinstance(gfx_off, float) and not gfx_off.is_integer()):
+        raise SkinError("vertex buffer gfx_off must be a whole number")
     try:
-        base = int(vertex_buffer.get("gfx_off", 0) or 0)
-    except (TypeError, ValueError):
+        base = int(gfx_off)
+    except (TypeError, ValueError, OverflowError):
         raise SkinError("vertex buffer gfx_off must be an integer") from None
     if base < 0 or base > len(blob):
         raise SkinError("vertex buffer offset is outside its buffer")

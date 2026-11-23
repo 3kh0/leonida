@@ -208,6 +208,33 @@ class TestSCSelectB64Translator(unittest.TestCase):
         words = mrt0_words(spv)
         self.assertEqual(words, [0x11112222, 0x33334444, 0x55556666, 0x77778888])
 
+def ref_s_quadmask_b32(s0: int) -> tuple[int, int]:
+    val = s0 & MASK32
+    res = 0
+    for i in range(8):
+        nibble = (val >> (4 * i)) & 0xF
+        if nibble != 0:
+            res |= (1 << i)
+    scc = 1 if res != 0 else 0
+    return res & MASK32, scc
+
+
+class TestSQuadmaskB32Reference(unittest.TestCase):
+    def test_ref_alternating_nibbles(self):
+        res, scc = ref_s_quadmask_b32(0x01020408)
+        self.assertEqual(res, 0x55)
+        self.assertEqual(scc, 1)
+
+    def test_ref_zero_input(self):
+        res, scc = ref_s_quadmask_b32(0)
+        self.assertEqual(res, 0)
+        self.assertEqual(scc, 0)
+
+    def test_ref_all_ones(self):
+        res, scc = ref_s_quadmask_b32(0xFFFFFFFF)
+        self.assertEqual(res, 0xFF)
+        self.assertEqual(scc, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

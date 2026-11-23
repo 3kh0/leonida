@@ -222,5 +222,96 @@ class TestSubF16ReferenceOracle(unittest.TestCase):
         self.assertEqual(got2 & 0xFFFF, POS_ZERO)
 
 
+# ==============================================================================
+# Symbolic AST Opcode Definitions and Typed Expressions
+# ==============================================================================
+
+class OperandType(Enum):
+    VGPR = auto()
+    SGPR = auto()
+    LITERAL = auto()
+
+
+@dataclass(frozen=True)
+class RegisterOperand:
+    op_type: OperandType
+    index: int
+
+    def __post_init__(self):
+        if self.op_type == OperandType.VGPR and not (0 <= self.index <= 255):
+            raise ValueError(f"VGPR index out of range [0, 255]: {self.index}")
+        if self.op_type == OperandType.SGPR and not (0 <= self.index <= 105):
+            raise ValueError(f"SGPR index out of range [0, 105]: {self.index}")
+
+    @property
+    def name(self) -> str:
+        prefix = "v" if self.op_type == OperandType.VGPR else "s"
+        return f"{prefix}{self.index}"
+
+
+@dataclass(frozen=True)
+class LiteralOperand:
+    value: int
+
+    def __post_init__(self):
+        if not (0 <= self.value <= MASK32):
+            raise ValueError(f"Literal 32-bit value out of range: {self.value}")
+
+
+@dataclass(frozen=True)
+class VOPModifiers:
+    clamp: bool = False
+    abs_s0: bool = False
+    abs_s1: bool = False
+    neg_s0: bool = False
+    neg_s1: bool = False
+
+
+@dataclass
+class VSubF16Instruction:
+    dst: RegisterOperand
+    src0: Union[RegisterOperand, LiteralOperand]
+    src1: Union[RegisterOperand, LiteralOperand]
+    modifiers: VOPModifiers = field(default_factory=VOPModifiers)
+
+    def __post_init__(self):
+        if self.dst.op_type != OperandType.VGPR:
+            raise TypeError("Destination of v_sub_f16 must be a VGPR")
+
+
+class TestSubF16AST(unittest.TestCase):
+    def test_valid_ast_construction(self):
+        dst = RegisterOperand(OperandType.VGPR, 0)
+        s0 = RegisterOperand(OperandType.VGPR, 1)
+        s1 = RegisterOperand(OperandType.VGPR, 2)
+        mods = VOPModifiers(clamp=True, abs_s0=True)
+        insn = VSubF16Instruction(dst=dst, src0=s0, src1=s1, modifiers=mods)
+        self.assertEqual(insn.dst.name, "v0")
+        self.assertEqual(insn.src0.name, "v1")
+        self.assertEqual(insn.src1.name, "v2")
+        self.assertTrue(insn.modifiers.clamp)
+        self.assertTrue(insn.modifiers.abs_s0)
+
+    def test_invalid_register_indices(self):
+        with self.assertRaises(ValueError):
+            RegisterOperand(OperandType.VGPR, 256)
+        with self.assertRaises(ValueError):
+            RegisterOperand(OperandType.SGPR, 106)
+
+    def test_invalid_dst_type(self):
+        with self.assertRaises(TypeError):
+            VSubF16Instruction(
+                dst=RegisterOperand(OperandType.SGPR, 0),
+                src0=RegisterOperand(OperandType.VGPR, 1),
+                src1=RegisterOperand(OperandType.VGPR, 2),
+            )
+
+    def test_literal_operand_bounds(self):
+        with self.assertRaises(ValueError):
+            LiteralOperand(-1)
+        with self.assertRaises(ValueError):
+            LiteralOperand(0x1_0000_0000)
+
+
 if __name__ == '__main__':
     unittest.main()

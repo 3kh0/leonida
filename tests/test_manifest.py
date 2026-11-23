@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -40,6 +41,73 @@ class ManifestSha256Test(unittest.TestCase):
 
         expected = hashlib.sha256(b"").hexdigest()
         self.assertEqual(manifest.sha256(path), expected)
+
+
+class ManifestEofTest(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.pkg = os.path.join(folder.name, "pkg")
+        os.mkdir(self.pkg)
+        self.source = os.path.join(self.pkg, "sample.dat")
+        self.payload = b"nonempty synthetic payload"
+        with open(self.source, "wb") as handle:
+            handle.write(self.payload)
+        self.out = os.path.join(folder.name, "manifest.json")
+
+    @contextlib.contextmanager
+    def reported_size(self, size):
+        source_stat = os.stat(self.source)
+        real_fstat = os.fstat
+        real_getsize = os.path.getsize
+
+        def fstat(fd):
+            st = real_fstat(fd)
+            if not os.path.samestat(st, source_stat):
+                return st
+            # Model a virtual file with understated size but stable identity and timestamps.
+            return SimpleNamespace(st_size=size, st_mtime_ns=st.st_mtime_ns, st_ctime_ns=st.st_ctime_ns,
+                                   st_dev=st.st_dev, st_ino=st.st_ino)
+
+        def getsize(path):
+            return size if path == self.source else real_getsize(path)
+
+        with patch.object(manifest.os, "fstat", side_effect=fstat), \
+                patch.object(manifest.os.path, "getsize", side_effect=getsize):
+            yield
+
+    def test_hash_refuses_bytes_beyond_the_reported_size(self):
+        for size in (0, 3):
+            with self.subTest(size=size), self.reported_size(size):
+                with self.assertRaisesRegex(manifest.ManifestError, "changed while hashing"):
+                    manifest.sha256(self.source, expected_size=size)
+
+    def test_create_refuses_prefix_digest_and_preserves_previous_manifest(self):
+        previous = b'{"files":{}}\n'
+        for jobs in (1, 2):
+            for size in (0, 3):
+                with self.subTest(jobs=jobs, size=size):
+                    with open(self.out, "wb") as handle:
+                        handle.write(previous)
+                    with self.reported_size(size), contextlib.redirect_stdout(io.StringIO()):
+                        with self.assertRaisesRegex(manifest.ManifestError, "changed while hashing"):
+                            manifest.create(self.pkg, self.out, jobs=jobs)
+                    with open(self.out, "rb") as handle:
+                        self.assertEqual(handle.read(), previous)
+                    with open(self.source, "rb") as handle:
+                        self.assertEqual(handle.read(), self.payload)
+
+    def test_verify_refuses_a_manifest_matching_only_the_prefix(self):
+        for jobs in (1, 2):
+            for size in (0, 3):
+                with self.subTest(jobs=jobs, size=size):
+                    with open(self.out, "w", encoding="utf-8", newline="\n") as handle:
+                        json.dump({"files": {"sample.dat": {
+                            "size": size, "sha256": hashlib.sha256(self.payload[:size]).hexdigest(),
+                        }}}, handle)
+                    with self.reported_size(size), contextlib.redirect_stdout(io.StringIO()):
+                        with self.assertRaisesRegex(manifest.ManifestError, "changed while hashing"):
+                            manifest.verify(self.pkg, self.out, jobs=jobs)
 
 
 class ManifestWalkTest(unittest.TestCase):

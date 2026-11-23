@@ -480,5 +480,49 @@ class TestSubF16SIMDDivergence(unittest.TestCase):
             self.assertEqual(wave.vgprs[10][lane] & 0xFFFF, HALF)
 
 
+# ==============================================================================
+# Register Aliasing and In-Place Operand Preservation
+# ==============================================================================
+
+class TestSubF16RegisterAliasing(unittest.TestCase):
+    def test_dst_aliases_src0(self):
+        machine = ScalarMachine()
+        machine.vgprs[0] = 0x1111_0000 | THREE
+        machine.vgprs[1] = ONE
+        insn = VSubF16Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 0),
+            src1=RegisterOperand(OperandType.VGPR, 1),
+        )
+        machine.step(insn)
+        self.assertEqual(machine.vgprs[0] >> 16, 0x1111)
+        self.assertEqual(machine.vgprs[0] & 0xFFFF, TWO)
+
+    def test_dst_aliases_src1(self):
+        machine = ScalarMachine()
+        machine.vgprs[0] = 0x2222_0000 | ONE
+        machine.vgprs[1] = THREE
+        insn = VSubF16Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 1),
+            src1=RegisterOperand(OperandType.VGPR, 0),
+        )
+        machine.step(insn)
+        self.assertEqual(machine.vgprs[0] >> 16, 0x2222)
+        self.assertEqual(machine.vgprs[0] & 0xFFFF, TWO)
+
+    def test_dst_aliases_both_src0_and_src1(self):
+        machine = ScalarMachine()
+        machine.vgprs[0] = 0x3333_0000 | TWO
+        insn = VSubF16Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 0),
+            src1=RegisterOperand(OperandType.VGPR, 0),
+        )
+        machine.step(insn)
+        self.assertEqual(machine.vgprs[0] >> 16, 0x3333)
+        self.assertEqual(machine.vgprs[0] & 0xFFFF, POS_ZERO)
+
+
 if __name__ == '__main__':
     unittest.main()

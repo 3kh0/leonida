@@ -9,8 +9,9 @@ triangle's box by one rounding step: both are skipped and the ray passes through
 the step with float32 rounding after every operation and compares a whole BLAS traversal with a brute force over
 every leaf of the same buffer: the tree must not lose a hit that the leaf test finds (docs/bvh.md 7a, box padding).
 
-box_rounding "nearest" is the translator on main; "zero" is the slab rounding measured on RDNA2 for #4957,
-t = rz(rz(plane - origin) * inverse direction). The triangle test rounds to nearest in both.
+box_rounding "zero" is the translator on main and RDNA2 (SHADER-650, #4957): t = rz(rz(plane - origin) * inverse
+direction); "nearest" is the translator before it. The triangle step is the translator's, the words measured on RDNA2
+(triangle_hit32), rounding to nearest.
 
 Standard library only. Divisions round the double quotient to float32 (Vulkan allows 2.5 ulp for OpFDiv).
 """
@@ -105,46 +106,60 @@ def box_test32(extent, org, inv, lo, hi, rtz=False):
     return tnear if tmax >= tnear and tmin < extent else INF
 
 
-def triangle_test32(v, org, d, inv, remap=X.REMAP_IDENTITY):
-    """(t/|det|, sign(det), b_i/|det|, b_j/|det|), or (inf, 1, 0, 0): the translator's triangle step."""
+def triangle_hit32(v, org, d, remap=X.REMAP_IDENTITY):
+    """(hit, words): the translator's triangle step (rdna2spirv.py image_bvh, the words measured on RDNA2). With T,
+    det and the edge functions of the watertight test, k = |d[kz]|^3, the words are k*(T, det, b_i, b_j), a miss
+    replacing word 0 with copysign(inf, word 1); a consumer's t is word 0 / word 1. The shear is multiplied through
+    by |d[kz]| (no division; the inverse direction is not read). A zero edge function passes when its edge, (tx, ty)
+    = Q - P in the sheared frame, has ty == 0 ? tx < 0 : sign(det) ty > 0; a hit also needs det != 0 and
+    sign(det) k T >= 0, with no test against the ray extent. A NaN in the ray or an infinite origin gives
+    (inf, 1, 0, 0), a miss."""
+    if any(math.isnan(c) for c in [*org, *d]) or any(math.isinf(c) for c in org):
+        return False, (INF, 1.0, 0.0, 0.0)
     ad = [abs(x) for x in d]
     if ad[0] >= ad[1]:
         kx0, ky0, kz = (1, 2, 0) if ad[0] >= ad[2] else (0, 1, 2)
     else:
         kx0, ky0, kz = (2, 0, 1) if ad[1] >= ad[2] else (0, 1, 2)
-    kx, ky = (ky0, kx0) if d[kz] < 0.0 else (kx0, ky0)
-    sz = inv[kz]
-    sx, sy = _mul(d[kx], sz), _mul(d[ky], sz)
+    neg = d[kz] < 0.0
+    kx, ky = (ky0, kx0) if neg else (kx0, ky0)
+    adz = abs(d[kz])
+    sgz = -1.0 if neg else 1.0
+    sx, sy = _mul(sgz, d[kx]), _mul(sgz, d[ky])
 
     def shear(p):
         r = [_sub(p[c], org[c]) for c in range(3)]
-        return _sub(r[kx], _mul(sx, r[kz])), _sub(r[ky], _mul(sy, r[kz])), r[kz]
-    (ax, ay, az), (bx, by, bz), (cx, cy, cz) = (shear(p) for p in v)
+        return _sub(_mul(r[kx], adz), _mul(sx, r[kz])), _sub(_mul(r[ky], adz), _mul(sy, r[kz])), r[kz]
+    a, b, c = (shear(p) for p in v)
+    (ax, ay, az), (bx, by, bz), (cx, cy, cz) = a, b, c
     uu = _sub(_mul(cx, by), _mul(cy, bx))
     vv = _sub(_mul(ax, cy), _mul(ay, cx))
     ww = _sub(_mul(bx, ay), _mul(by, ax))
-    cond = not ((uu < 0 or vv < 0 or ww < 0) and (uu > 0 or vv > 0 or ww > 0))
-    ea, eb, ec = uu == 0.0, vv == 0.0, ww == 0.0
-
-    def edge(x0, y0, x1, y1):
-        tx, ty = _sub(x1, x0), _sub(y1, y0)
-        return ty < 0.0 if tx == 0.0 else tx < 0.0
-
-    def vert(x0, x1, x2):
-        return _sub(x1, x0) <= 0.0 and _sub(x2, x0) > 0.0
-    ie = cond and ((ea and edge(bx, by, cx, cy)) or (eb and edge(cx, cy, ax, ay)) or (ec and edge(ax, ay, bx, by)))
-    isva, isvb, isvc = eb and ec, ea and ec, ea and eb
-    iv = not (isva or isvb or isvc) or (isva and vert(ax, bx, cx)) or (isvb and vert(bx, cx, ax)) or \
-        (isvc and vert(cx, ax, bx))
-    hitc = (ie and iv) if (ea or eb or ec) else cond
     det = _add(uu, _add(vv, ww))
-    tt = _add(_add(_mul(uu, _mul(sz, az)), _mul(vv, _mul(sz, bz))), _mul(ww, _mul(sz, cz)))
-    sg = 1.0 if det > 0.0 else -1.0 if det < 0.0 else 0.0
-    if not (hitc and not _mul(sg, tt) < 0.0):
-        return (INF, 1.0, 0.0, 0.0)
-    dab = abs(det)
+    tt = _add(_add(_mul(uu, az), _mul(vv, bz)), _mul(ww, cz))
+    tk = _mul(sgz, tt)
+    sd = 1.0 if det > 0.0 else -1.0
+
+    def inside(x, p, q):
+        if x == 0.0:
+            tx, ty = _sub(q[0], p[0]), _sub(q[1], p[1])
+            return tx < 0.0 if ty == 0.0 else _mul(sd, ty) > 0.0
+        return _mul(sd, x) > 0.0
+    hit = (det > 0.0 or det < 0.0) and inside(uu, b, c) and inside(vv, c, a) and inside(ww, a, b) and \
+        _mul(sd, tk) >= 0.0
     pick = lambda s: ww if s == 2 else vv if s == 1 else uu                    # noqa: E731
-    return (_div(tt, dab), sg, _div(pick(remap & 3), dab), _div(pick((remap >> 2) & 3), dab))
+
+    def canon(x):                                    # every zero +0, every NaN one NaN
+        return math.nan if math.isnan(x) else 0.0 if x == 0.0 else x
+    words = [canon(x) for x in (tk, _mul(adz, det), _mul(adz, pick(remap & 3)), _mul(adz, pick((remap >> 2) & 3)))]
+    if not hit:
+        words[0] = -INF if math.isnan(words[1]) or math.copysign(1.0, words[1]) < 0 else INF
+    return hit, tuple(words)
+
+
+def triangle_test32(v, org, d, inv, remap=X.REMAP_IDENTITY):
+    """The four words of the translator's triangle step (triangle_hit32); `inv` is not read, as on RDNA2."""
+    return triangle_hit32(v, org, d, remap)[1]
 
 
 def inverse_dir32(d):
@@ -156,17 +171,17 @@ def _leaf_hit(mem, bvh_va, p, org, d, inv, best):
     kind = X.ptr_type(p)
     verts = [mem.f32(va + 12 * s, 3) for s in X.TRI_VERTS[kind]]
     remap = (mem.u32(va + 60)[0] >> (8 * kind)) & 0xFF
-    rt, rs, _, _ = triangle_test32(verts, org, d, inv, remap)
-    if rt == INF:
+    hit, words = triangle_hit32(verts, org, d, remap)
+    if not hit:
         return None
-    t = _div(rt, rs)
+    t = _div(words[0], words[1])
     if not t <= best:
         return None
     gif, base, prim2 = mem.u32(va + 48, 3)
     return {"t": t, "geometry": gif >> 8, "primitive": prim2 if kind == X.TRI1 else base}
 
 
-def trace32(mem, bvh_va, org, d, tmax=INF, box_rounding="nearest"):
+def trace32(mem, bvh_va, org, d, tmax=INF, box_rounding="zero"):
     """Closest hit in the BLAS at bvh_va through its tree, with the float32 step: a dict with t, geometry and
     primitive, or None."""
     rtz = box_rounding == "zero"
@@ -207,17 +222,28 @@ def trace32(mem, bvh_va, org, d, tmax=INF, box_rounding="nearest"):
 def leaves32(mem, bvh_va, org, d, tmax=INF):
     """Closest hit over every leaf of the BLAS at bvh_va, no boxes: what its tree must not lose."""
     inv = inverse_dir32(d)
-    # numElements counts triangle references; a paired record (TRI0 + TRI1) holds two, so walk the 64-byte leaf
-    # records from offsetToElements up to offsetToNodes instead
-    nodes, elements = mem.u32(bvh_va + 40)[0], mem.u32(bvh_va + 52)[0]
     hit = None
-    for e in range((nodes - elements) // 64):
-        off = elements + 64 * e
-        kinds = [X.TRI0] + ([X.TRI1] if mem.u32(bvh_va + off + 56)[0] != X.INVALID else [])
-        for kind in kinds:
-            h = _leaf_hit(mem, bvh_va, (off // X.UNIT) << 3 | kind, org, d, inv, hit["t"] if hit else tmax)
-            hit = h or hit
+    for p in tree_leaves(mem, bvh_va):
+        h = _leaf_hit(mem, bvh_va, p, org, d, inv, hit["t"] if hit else tmax)
+        hit = h or hit
     return hit
+
+
+def tree_leaves(mem, bvh_va):
+    """The leaf pointers the tree of the BLAS at bvh_va reaches, boxes ignored (TRI0, or TRI1 for a paired triangle).
+    Not the leaf records: the GPU builder leaves a paired sibling's own record in place, unreferenced, and its vertices
+    in their original order give a t one rounding step off the TRI1 the tree holds for that triangle."""
+    leaves, stack = [], [mem.u32(bvh_va + 48)[0]]
+    while stack:
+        p = stack.pop()
+        if p == X.INVALID:
+            continue
+        kind = X.ptr_type(p)
+        if kind <= X.TRI3:
+            leaves.append(p)
+        elif kind in (X.BOX16, X.BOX32):
+            stack.extend(mem.u32(bvh_va + X.ptr_offset(p), 4))
+    return leaves
 
 
 def edge_rays(triangles, count, rng, spread=12.0):
@@ -235,7 +261,7 @@ def edge_rays(triangles, count, rng, spread=12.0):
     return rays
 
 
-def lost_hits(mem, bvh_va, rays, box_rounding="nearest"):
+def lost_hits(mem, bvh_va, rays, box_rounding="zero"):
     """The rays whose leaf test finds a nearer hit than the traversal of the tree: (origin, direction, tree, leaves)."""
     lost = []
     for o, d in rays:

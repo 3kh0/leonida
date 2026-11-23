@@ -40,8 +40,8 @@ def closed_cube(n=4, h=2.0):
     return tris
 
 
-def placed(tris):
-    data, _ = X.build_blas(tris)
+def placed(tris, box16=False):
+    data, _ = X.build_blas(tris, box16=box16)
     mem = X.Memory()
     mem.place(BASE, data)
     return mem
@@ -56,17 +56,17 @@ class TreeKeepsLeafHits(unittest.TestCase):
         mem = placed(PAIR)
         o, d = ray32(RAY)
         leaf = B.leaves32(mem, BASE, o, d)
-        self.assertIsNotNone(leaf)                                 # the edge rule gives the ray to triangle 1
-        self.assertEqual(leaf["primitive"], 1)
+        self.assertIsNotNone(leaf)                                 # RDNA2's edge rule gives the ray to triangle 0
+        self.assertEqual(leaf["primitive"], 0)
         for rounding in ("nearest", "zero"):
             with self.subTest(box_rounding=rounding):
                 got = B.trace32(mem, BASE, o, d, box_rounding=rounding)
                 self.assertIsNotNone(got)
-                self.assertEqual((got["primitive"], got["t"]), (1, leaf["t"]))
+                self.assertEqual((got["primitive"], got["t"]), (0, leaf["t"]))
 
     def test_paired_leaves(self):
-        # build_blas(pair=True) puts two triangles in one leaf record (TRI0 and TRI1): numElements counts triangle
-        # references, not records, so the leaf brute force must walk the records up to offsetToNodes
+        # build_blas(pair=True) puts two triangles in one leaf record (TRI0 and TRI1): the leaf brute force walks the
+        # leaf pointers the tree holds (tree_leaves), TRI1 included
         cube = closed_cube()
         data, info = X.build_blas(cube, pair=True)
         self.assertLess(info["leaves"], info["triangles"])
@@ -78,12 +78,14 @@ class TreeKeepsLeafHits(unittest.TestCase):
         self.assertEqual(len(B.lost_hits(mem, BASE, rays)), 0)
 
     def test_edge_and_vertex_rays(self):
+        # BOX16 too: a coordinate a half holds exactly (0, 1, 2) is not moved by the outward rounding, only by the pad
         for name, tris in (("pair", PAIR), ("closed cube", closed_cube())):
-            mem = placed(tris)
             rays = B.edge_rays(tris, 400, random.Random(5))
-            for rounding in ("nearest", "zero"):
-                with self.subTest(mesh=name, box_rounding=rounding):
-                    self.assertEqual(len(B.lost_hits(mem, BASE, rays, rounding)), 0)
+            for box16 in (False, True):
+                mem = placed(tris, box16)
+                for rounding in ("nearest", "zero"):
+                    with self.subTest(mesh=name, box16=box16, box_rounding=rounding):
+                        self.assertEqual(len(B.lost_hits(mem, BASE, rays, rounding)), 0)
 
 
 class SameStepAsTheTranslator(unittest.TestCase):
@@ -112,10 +114,10 @@ class SameStepAsTheTranslator(unittest.TestCase):
             for c, v in enumerate(b):
                 words[node + 16 + 24 * i + 4 * c] = X.struct.unpack("<I", X.struct.pack("<f", v))[0]
         got, o, d, inv = self.run_step(X.BOX32, words)
-        model = [B.box_test32(100.0, o, inv, b[:3], b[3:]) for b in boxes]
-        self.assertEqual(got[0], 0x100)                        # only the first triangle's box is entered
-        self.assertEqual(got[1:], [X.INVALID] * 3)
-        self.assertEqual([m != X.INF for m in model], [True, False])
+        # the translator rounds the slabs toward zero, as RDNA2 (SHADER-650): both exact boxes are entered then
+        model = [B.box_test32(100.0, o, inv, b[:3], b[3:], rtz=True) for b in boxes]
+        self.assertEqual(sorted(k for k in got if k != X.INVALID),
+                         sorted(k for k, m in zip((0x100, 0x108), model) if m != X.INF))
 
     def test_triangle_nodes(self):
         for k, tri in enumerate(PAIR):

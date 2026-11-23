@@ -370,5 +370,34 @@ class TestValuAlignbitB32Aliasing(unittest.TestCase):
         self.assertEqual(state.vgprs[0], expected)
 
 
+class TestValuAlignbitB32ConditionCodes(unittest.TestCase):
+    """Stage 6: Condition codes, status flags, and carry/borrow generation."""
+
+    def test_scc_and_vcc_unmodified(self) -> None:
+        state = ScalarMachineState()
+        state.scc = 1
+        state.vcc = 0xAAAAAAAAAAAAAAAA
+
+        instr_zero = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.imm(0),
+            src1=Operand.imm(0),
+            src2=Operand.imm(0),
+        )
+        ScalarInterpreter().step(instr_zero, state)
+        self.assertEqual(state.scc, 1)
+        self.assertEqual(state.vcc, 0xAAAAAAAAAAAAAAAA)
+
+        instr_neg = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.imm(0x80000000),
+            src1=Operand.imm(0),
+            src2=Operand.imm(0),
+        )
+        ScalarInterpreter().step(instr_neg, state)
+        self.assertEqual(state.scc, 1)
+        self.assertEqual(state.vcc, 0xAAAAAAAAAAAAAAAA)
+
+
 if __name__ == "__main__":
     unittest.main()

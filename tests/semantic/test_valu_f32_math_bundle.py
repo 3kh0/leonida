@@ -697,5 +697,32 @@ class TestLdexpF32Oracle(unittest.TestCase):
         self.assertEqual(ref_ldexp_f32(QNAN, 5), QNAN)
 
 
+# ------------------------------------------------------------------------------
+# v_ldexp_f32 AST Definitions
+# ------------------------------------------------------------------------------
+
+@dataclass
+class VLdexpF32Instruction:
+    dst: RegisterOperand
+    src0: Union[RegisterOperand, LiteralOperand]
+    src1: Union[RegisterOperand, LiteralOperand]
+
+    def __post_init__(self):
+        if self.dst.op_type != OperandType.VGPR:
+            raise TypeError("Destination of v_ldexp_f32 must be a VGPR")
+
+
+class TestLdexpF32AST(unittest.TestCase):
+    def test_ast_construction(self):
+        insn = VLdexpF32Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 1),
+            src1=RegisterOperand(OperandType.VGPR, 2),
+        )
+        self.assertEqual(insn.dst.name, "v0")
+        self.assertEqual(insn.src0.name, "v1")
+        self.assertEqual(insn.src1.name, "v2")
+
+
 if __name__ == '__main__':
     unittest.main()

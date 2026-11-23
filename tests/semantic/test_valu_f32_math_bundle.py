@@ -819,5 +819,44 @@ class TestLdexpF32IEEE754Handling(unittest.TestCase):
         self.assertEqual(ref_ldexp_f32(0x8000_0001, 10), NEG_ZERO)
 
 
+# ------------------------------------------------------------------------------
+# v_ldexp_f32 Negative Controls and Translator Hardware Execution
+# ------------------------------------------------------------------------------
+
+class TestLdexpF32RejectionAndHardwareTranslator(unittest.TestCase):
+    def test_syntax_rejection(self):
+        with self.assertRaises(TypeError):
+            VLdexpF32Instruction(
+                dst=RegisterOperand(OperandType.SGPR, 0),
+                src0=RegisterOperand(OperandType.VGPR, 1),
+                src1=RegisterOperand(OperandType.VGPR, 2),
+            )
+
+    def test_hardware_translator_execution(self):
+        cases = [
+            (f32_to_bits(0.5), 2, f32_to_bits(2.0)),
+            (f32_to_bits(1.0), -1, f32_to_bits(0.5)),
+            (f32_to_bits(1.0), 200, POS_INF),
+            (f32_to_bits(1.0), -200, POS_ZERO),
+            (f32_to_bits(-1.0), -200, NEG_ZERO),
+            (POS_ZERO, 10, POS_ZERO),
+            (NEG_ZERO, 10, NEG_ZERO),
+            (POS_INF, -5, POS_INF),
+            (QNAN, 5, QNAN),
+            (0x0000_0001, 5, POS_ZERO),
+        ]
+        for s0, s1, expected in cases:
+            prog = [
+                f"v_mov_b32 v1, {s0:#x}",
+                f"v_mov_b32 v2, {s1}",
+                "v_ldexp_f32 v0, v1, v2",
+                "exp mrt0 v0, v0, v0, v0 done vm",
+                "s_endpgm",
+            ]
+            spv = support.translate_lines("ps_ldexp_hw_test", prog)
+            words = support.mrt0_words(spv)
+            self.assertEqual(words[0], expected, f"Failed on ldexp({s0:#x}, {s1}): got {words[0]:#x}, expected {expected:#x}")
+
+
 if __name__ == '__main__':
     unittest.main()

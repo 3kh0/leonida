@@ -4,7 +4,7 @@ import contextlib
 import fnmatch
 import io
 import os
-from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -76,6 +76,18 @@ class HarnessError(unittest.TestCase):
                 launch.return_value.returncode = 0
                 self.assertEqual(bench_wave64.main(), 0)
             self.assertEqual([call.args[0][0] for call in launch.call_args_list], [str(harness)] * 3)
+
+    def test_hung_harness_is_reported_as_a_failed_run(self):
+        expired = subprocess.TimeoutExpired(["vk_compute_test"], 0.25)
+        with patch.dict(os.environ, {"LEONIDA_GPU_TEST_TIMEOUT": "0.25"}), \
+                patch.object(bench_wave64.subprocess, "run", side_effect=expired) as run:
+            timing, detail, device = bench_wave64.run("build", "synthetic.spv", 1, 1, "*amd*", False)
+
+        self.assertEqual(run.call_args.kwargs["timeout"], 0.25)
+        self.assertIsNone(timing)
+        self.assertIsNone(device)
+        self.assertIn("timed out after 0.25 s", detail)
+        self.assertIn("LEONIDA_GPU_TEST_TIMEOUT", detail)
 
     def test_missing_binary_reports_failure(self):
         with patch.object(bench_wave64, "build", lambda work, name, emulate, llvm_mc: "x.spv"), \

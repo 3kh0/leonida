@@ -370,6 +370,25 @@ class TestVSubNcI32Translator(unittest.TestCase):
         for l in range(32):
             self.assertEqual(results[l], 0x80000000)
 
+def ref_v_subrev_nc_u32(src0: int, src1: int, clamp: bool = False) -> int:
+    """Reference mathematical oracle for v_subrev_nc_u32 (computes src1 - src0)."""
+    s0, s1 = src0 & MASK32, src1 & MASK32
+    if clamp:
+        return max(0, s1 - s0)
+    return (s1 - s0) & MASK32
+
+
+class TestVSubrevNcU32Oracle(unittest.TestCase):
+    def test_reverse_subtraction(self) -> None:
+        # src0 = 30, src1 = 100 -> 100 - 30 = 70
+        self.assertEqual(ref_v_subrev_nc_u32(30, 100), 70)
+        # src0 = 100, src1 = 30 -> 30 - 100 = -70 -> 0xFFFFFFBA
+        self.assertEqual(ref_v_subrev_nc_u32(100, 30), (MASK32 - 69))
+
+    def test_clamp_saturation(self) -> None:
+        self.assertEqual(ref_v_subrev_nc_u32(100, 30, clamp=True), 0)
+        self.assertEqual(ref_v_subrev_nc_u32(30, 100, clamp=True), 70)
+
 
 if __name__ == "__main__":
     unittest.main()

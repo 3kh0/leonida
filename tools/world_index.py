@@ -820,14 +820,16 @@ def _check_report_paths(parser, reports, source, directory_files):
 
 
 @contextmanager
-def _staged_entity_report(path):
+def staged_jsonl(path, *, create_parent=False):
+    """Yield a text stream and replace the destination only after all rows are written."""
     if not path:
         yield None
         return
 
-    destination = _resolve_report_path(path)
+    destination = _resolve_report_path(os.fspath(path))
     parent = os.path.dirname(destination)
-    os.makedirs(parent, exist_ok=True)
+    if create_parent:
+        os.makedirs(parent, exist_ok=True)
     try:
         mode = os.stat(destination).st_mode
     except FileNotFoundError:
@@ -840,7 +842,7 @@ def _staged_entity_report(path):
     staged = os.path.join(directory, "entities.jsonl")
     try:
         with open(staged, "w", encoding="utf-8", newline="\n") as handle:
-            yield EntityRows(handle)
+            yield handle
         if mode is not None:
             os.chmod(staged, mode & 0o777)
         os.replace(staged, destination)
@@ -874,7 +876,8 @@ def main(argv=None):
         # Check the same inputs the directory scan will read, before the streaming report exists.
         directory_files = list(_directory_files(a.path)) if os.path.isdir(a.path) else None
         _check_report_paths(ap, reports, a.path, directory_files)
-        with _staged_entity_report(a.entities_out) as ent:
+        with staged_jsonl(a.entities_out, create_parent=True) as handle:
+            ent = EntityRows(handle) if handle is not None else None
             sink = _Both(agg, ent) if agg is not None and ent is not None else (agg if agg is not None else ent)
             rows, stats = scan_path(a.path, a.start, a.limit, a.max_inflate, sink, directory_files=directory_files)
             summary = _write_reports(a, rows, stats, agg)

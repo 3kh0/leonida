@@ -683,24 +683,22 @@ def summarize(total, entities=None, lights_out=None):
                                                   if len(sets) > 1 and any(len(s) != len(sets[0]) for s in sets)),
     }
     placed = collections.Counter()
-    out = None
-    staged = None
-    try:
-        if lights_out:
-            # Stage the report: a bad --entities row below must not truncate a report from an earlier run.
-            staged = lights_out + ".partial"
-            out = open(staged, "w", encoding="utf-8", newline="\n")
+    with WI.staged_jsonl(lights_out) as out:
+        if out is not None:
             for row in total["world_lights"]:
                 out.write(json.dumps(row, separators=(",", ":")) + "\n")
         placed["entity_lights_in_maps"] = len(total["world_lights"]) if lights_out else lights.get("lights_entity_in_map_placed", 0)
         if entities:
             with open(entities, encoding="utf-8") as f:
-                for line in f:
+                for lineno, line in enumerate(f, 1):
                     if not line.strip():
                         continue
-                    e = json.loads(line)
-                    a = e.get("archetype")
-                    a = int(a, 16) if isinstance(a, str) else a    # world_index writes the hash as hex
+                    try:
+                        e = json.loads(line)
+                        a = e.get("archetype")
+                        a = int(a, 16) if isinstance(a, str) else a    # world_index writes the hash as hex
+                    except ValueError as error:
+                        raise ValueError(f"{entities}:{lineno}: {error}") from error
                     sets = arch.get(a)
                     placed["entities"] += 1
                     if not sets:
@@ -715,27 +713,6 @@ def summarize(total, entities=None, lights_out=None):
                                          e.get("scale_xy"), e.get("scale_z"))
                             out.write(json.dumps(_light_row(p, d, L, "archetype", a),
                                                  separators=(",", ":")) + "\n")
-    except BaseException:
-        if out is not None:
-            try:
-                out.close()
-            except OSError:
-                pass
-            out = None
-        if staged is not None and os.path.exists(staged):
-            os.remove(staged)
-        raise
-    finally:
-        if out is not None:
-            out.close()
-    if staged is not None:
-        try:
-            os.replace(staged, lights_out)
-        except BaseException:
-            # A destination that is a directory (or read-only) must not leave the staged copy behind.
-            if os.path.exists(staged):
-                os.remove(staged)
-            raise
     summary["placement"] = dict(placed)
     nodes = [n for part in total["nodes"] for n in part]
     links = [l for part in total["links"] for l in part]
@@ -791,11 +768,8 @@ def main(argv=None):
     total = scan(a.archive, a.jobs, a.start, a.limit, bool(a.lights_out))
     try:
         summary = summarize(total, a.entities, a.lights_out)
-    except ValueError as e:            # a bad --entities row, or an archetype that is not a number
-        print(f"ERROR: {a.entities}: {e}", file=sys.stderr)
-        return 2
-    except OSError as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+    except (OSError, ValueError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         return 2
     text = json.dumps(summary, indent=1, sort_keys=True)
     if a.out:

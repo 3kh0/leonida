@@ -140,6 +140,30 @@ class TestVAddNcU32Translator(unittest.TestCase):
         for l in range(32):
             self.assertEqual(results[l], 0xFFFFFFFF)
 
+def ref_v_add_nc_i32(src0: int, src1: int, clamp: bool = False) -> int:
+    """Reference mathematical oracle for v_add_nc_i32."""
+    s0, s1 = src0 & MASK32, src1 & MASK32
+    i0 = s0 - 0x100000000 if s0 & 0x80000000 else s0
+    i1 = s1 - 0x100000000 if s1 & 0x80000000 else s1
+    tot = i0 + i1
+    if clamp:
+        clamped = max(-0x80000000, min(tot, 0x7FFFFFFF))
+        return clamped & MASK32
+    return tot & MASK32
+
+
+class TestVAddNcI32Oracle(unittest.TestCase):
+    def test_basic_addition(self) -> None:
+        self.assertEqual(ref_v_add_nc_i32(50, -20), 30)
+        self.assertEqual(ref_v_add_nc_i32(-50, -20), (-70) & MASK32)
+
+    def test_wrapping_signed(self) -> None:
+        self.assertEqual(ref_v_add_nc_i32(0x7FFFFFFF, 1), 0x80000000)
+
+    def test_clamp_signed(self) -> None:
+        self.assertEqual(ref_v_add_nc_i32(0x7FFFFFFF, 10, clamp=True), 0x7FFFFFFF)
+        self.assertEqual(ref_v_add_nc_i32(0x80000000, -10, clamp=True), 0x80000000)
+
 
 if __name__ == "__main__":
     unittest.main()

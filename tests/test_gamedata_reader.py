@@ -317,6 +317,34 @@ class Run(unittest.TestCase):
                 with open(os.path.join(out, files[0]), encoding="utf-8") as f:
                     self.assertEqual(json.load(f), {"x": 2})
 
+    def test_root_filter_utf16_without_hint(self):
+        # UTF-16 bytes carry no root_hint from gamedata_xml's byte scanner, yet Reader parses them. The
+        # filter must probe the root from bytes instead of silently skipping the document.
+        d = os.path.join(self.tmp.name, "utf16")
+        os.makedirs(d)
+        for name, tag in (("match.xml", "CUtf16"), ("other.xml", "CUnrelated16")):
+            with open(os.path.join(d, name), "wb") as f:
+                f.write(f'<{tag}><x value="1"/></{tag}>'.encode("utf-16"))  # BOM included, no root_hint
+        for filt, want_docs, want_roots in (("CUtf16", 1, {"CUtf16": 1}),
+                                            ("CUnrelated16", 1, {"CUnrelated16": 1}),
+                                            ("CNope", 0, {})):
+            with self.subTest(filter=filt):
+                reader = R.Reader(root_handlers={}, type_handlers={})
+                s = R.run([d], root_filter=filt, reader=reader)
+                self.assertEqual(s["documents"], want_docs, s)
+                self.assertEqual(s["per_root_documents"], want_roots, s)
+
+    def test_root_filter_malformed_hintless_is_skipped(self):
+        # A hintless document whose root cannot be probed keeps the current skip behavior (no counter impact).
+        d = os.path.join(self.tmp.name, "bad16")
+        os.makedirs(d)
+        with open(os.path.join(d, "bad.xml"), "wb") as f:
+            f.write(b"\xff\xfe<\x00C\x00a")  # truncated UTF-16, no complete root
+        reader = R.Reader(root_handlers={}, type_handlers={})
+        s = R.run([d], root_filter="CAnything", reader=reader)
+        self.assertEqual((s["documents"], s["not_well_formed"]), (0, 0))
+        self.assertEqual(dict(reader.stats), {})
+
     def test_cli_prints_counts_and_writes_json(self):
         out = os.path.join(self.tmp.name, "json", "nested")
         r = subprocess.run([sys.executable, "-I", os.path.join(TOOLS, "gamedata_reader.py"), self.dir, "--out", out],

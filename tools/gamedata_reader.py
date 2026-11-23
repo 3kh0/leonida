@@ -259,6 +259,23 @@ def documents(targets):
     return gx.load_documents(targets)
 
 
+def _probe_root(data):
+    """The first element tag of ``data`` read from bytes, or ``None`` when no root can be read.
+
+    ``gamedata_xml`` records no ``root_hint`` for encodings its byte-oriented scanner cannot see (UTF-16 in
+    particular), even though ``Reader`` parses those bytes fine. This lightweight start-event probe is only
+    used when a filter needs a hint that was not provided; it never feeds the document through ``Reader`` and
+    so cannot affect its counters. A document with no readable root returns ``None`` and is skipped as before.
+    """
+    stream = io.BytesIO(data[len(BOM):] if data.startswith(BOM) else data)
+    try:
+        for _, el in ET.iterparse(stream, events=("start",)):
+            return el.tag
+    except (ET.ParseError, LookupError, ValueError):
+        return None
+    return None
+
+
 def run(targets, root_filter=None, out_dir=None, reader=None):
     """Read every document; returns a summary of counts (no names of entries, no values)."""
     reader = reader or Reader()
@@ -266,8 +283,13 @@ def run(targets, root_filter=None, out_dir=None, reader=None):
     written_names = set()
     for n, doc in enumerate(documents(targets)):
         hint = doc.get("root_hint")
-        if root_filter and hint != root_filter:
-            continue
+        if root_filter:
+            if hint:
+                # A recorded hint (even for a truncated tail) wins: it already named the closing root.
+                if hint != root_filter:
+                    continue
+            elif _probe_root(doc["data"]) != root_filter:
+                continue
         try:
             tag, _, value = reader.read(doc["data"])
         except (ET.ParseError, LookupError, ValueError) as e:

@@ -2237,7 +2237,8 @@ private:
     // takes resource_mutex_ or tracker_mutex_: the submission waited for may itself wait on another queue's work, and
     // that queue needs those locks to submit it. One execute runs at a time on a queue, so buffers_ is this caller's.
     // A timeout only means the GPU is slow: wait again rather than allocate past the cap. False when the device is lost
-    // (now or while waiting), so the caller submits nothing.
+    // (now or while waiting) or the wait failed (out of memory, unknown, validation failed: none of them says the oldest
+    // submission finished), so the caller submits nothing and the cap holds.
     bool wait_for_room() {
         for (;;) {
             if (context_.is_device_lost()) return false;
@@ -2253,8 +2254,10 @@ private:
             case VK_ERROR_DEVICE_LOST:
                 context_.mark_device_lost();
                 return false;
+            case VK_INCOMPLETE:
+                return true;  // nothing submitted yet to wait for: no wait can make room, allocate
             default:
-                return true;  // nothing submitted to wait for (or a host error): no wait can make room, allocate
+                return false;
             }
         }
     }

@@ -47,6 +47,18 @@ VKAPI_ATTR VkResult VKAPI_CALL stalling_wait_semaphores(VkDevice device, const V
     return real_wait_semaphores(device, info, timeout);
 }
 
+// Makes the next wait for room fail with an error that does not say the oldest submission finished.
+std::atomic<std::uint32_t> injected_errors{0};
+
+VKAPI_ATTR VkResult VKAPI_CALL failing_wait_semaphores(VkDevice device, const VkSemaphoreWaitInfo* info,
+                                                       std::uint64_t timeout) {
+    if (timeout == VulkanQueue::kQueuedWaitNs && injected_errors.load() == 0) {
+        ++injected_errors;
+        return VK_ERROR_OUT_OF_HOST_MEMORY;
+    }
+    return real_wait_semaphores(device, info, timeout);
+}
+
 const char* flags_text(VkQueueFlags f) {
     static char buf[32];
     std::snprintf(buf, sizeof buf, "%s%s%s", f & VK_QUEUE_GRAPHICS_BIT ? "G" : "", f & VK_QUEUE_COMPUTE_BIT ? "C" : "",
@@ -258,6 +270,23 @@ int main() {
         EXPECT(injected_stalls.load() == kStalls);  // the queue did reach the cap and wait
         EXPECT(allocated_command_buffers <= VulkanQueue::kMaxQueuedCommandBuffers);
         EXPECT(static_cast<std::uint8_t*>(dst_map)[kBig - 1] == 0x5A);
+
+        // A wait for room that fails (here out of host memory) does not prove a slot finished: that submission is
+        // refused instead of allocating past the cap, and the queue goes on once the GPU catches up.
+        context.vk.vkAllocateCommandBuffers = counting_allocate_command_buffers;
+        context.vk.vkWaitSemaphores = failing_wait_semaphores;
+        std::uint32_t refused = 0;
+        for (std::uint32_t i = 0; i < kSubmits; ++i)
+            if (direct.execute(big_lists) != ReplayResult::success) ++refused;
+        context.vk.vkAllocateCommandBuffers = real_allocate_command_buffers;
+        context.vk.vkWaitSemaphores = real_wait_semaphores;
+        EXPECT(direct.signal(fence.semaphore(), 6));
+        EXPECT(fence.wait(6, 20'000'000'000ull));
+        std::printf("wait error at the cap: %u of %u submits refused, %u command buffers allocated (cap %zu)\n",
+                    refused, kSubmits, allocated_command_buffers, VulkanQueue::kMaxQueuedCommandBuffers);
+        EXPECT(injected_errors.load() == 1);  // the queue was at the cap and its wait failed
+        EXPECT(refused == 1);
+        EXPECT(allocated_command_buffers <= VulkanQueue::kMaxQueuedCommandBuffers);
     }
 
     EXPECT(direct.idle() && compute.idle() && copy.idle());

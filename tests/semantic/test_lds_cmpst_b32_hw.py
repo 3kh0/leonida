@@ -460,6 +460,33 @@ class TestConditionCodesAndStatus(unittest.TestCase):
         self.assertFalse(s_neg.zero)
         self.assertTrue(s_neg.negative)
 
+class TestIEEE754BoundaryExtremes(unittest.TestCase):
+    def test_all_zero_and_all_ones_patterns(self):
+        new_val, old_val = ref_cmpst_b32(0x00000000, 0x00000000, 0xFFFFFFFF)
+        self.assertEqual(new_val, 0xFFFFFFFF)
+        self.assertEqual(old_val, 0x00000000)
+
+        new_val2, old_val2 = ref_cmpst_b32(0xFFFFFFFF, 0xFFFFFFFF, 0x00000000)
+        self.assertEqual(new_val2, 0x00000000)
+        self.assertEqual(old_val2, 0xFFFFFFFF)
+
+    def test_translator_all_ones_exchange(self):
+        instructions = [
+            "v_mov_b32_e32 v0, 0",
+            "v_mov_b32_e32 v1, 0xFFFFFFFF",
+            "ds_write_b32 v0, v1",
+            "s_waitcnt lgkmcnt(0)",
+            "v_mov_b32_e32 v2, 0x00000000",
+            "ds_cmpst_b32 v0, v1, v2",
+            "s_waitcnt lgkmcnt(0)",
+            "ds_read_b32 v3, v0",
+            "s_waitcnt lgkmcnt(0)",
+            "v_mov_b32_e32 v31, 0",
+            "buffer_store_dword v3, v31, s[0:3], 0 offen",
+        ]
+        mem = run_cs_lds(instructions)
+        self.assertEqual(mem.get(0), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -545,6 +545,7 @@ def measure(blob, stats):
 
 def collect(src, limit=None):
     stats = collections.Counter()
+    stats["PSIN files"] = 0   # listed when it stays 0: a folder without PSIN prints that, not nothing
     seen = 0
     for _name, blob in psin_index.files_in(src):
         if blob[:4] != psin_index.MAGIC:
@@ -588,6 +589,13 @@ def main():
         sys.stdout.write("\n")
         return 0
     try:
+        if os.path.isfile(a.src):
+            with open(a.src, "rb") as f:   # the magic only: an .rpf archive can be gigabytes
+                magic = f.read(len(psin_index.MAGIC))
+            if magic != psin_index.MAGIC:
+                print(f"ERROR: {a.src}: not a PSIN file; pass a PSIN file or a carve directory of .bin streams",
+                      file=sys.stderr)
+                return 2
         stats = collect(a.src, a.limit)
     except OSError as e:
         print(f"ERROR: {a.src}: {e}", file=sys.stderr)

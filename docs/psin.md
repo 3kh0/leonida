@@ -399,7 +399,9 @@ python -I tools/psin_data.py <PSIN file or carve directory> [--json] [--limit N]
 python -I tools/psin_data.py <PSIN file> --dump
 ```
 
-The default output is the counts above, for one file or every `.bin` in a carve directory. `--dump` prints one
+The default output is the counts above, for one file or every `.bin` in a carve directory. A directory without PSIN
+streams prints `PSIN files 0`. A single file that isn't PSIN, such as an `.rpf` archive that hasn't been carved, is
+one error line with exit 2. `--dump` prints one
 container's decoded tree (hashes as hex) on stdout, for local inspection only. It writes no file and must not be
 pasted into an issue or a pull request. `tests/test_psin_data.py` builds containers from invented names and covers
 every layout above, the end padding, a bad fill, pointers out of range, an unlisted enum value, a skipped type and

@@ -729,7 +729,7 @@ int main(int argc, char** argv) {
             note("TLS check: ThreadLocalStoragePointer[" + std::to_string(tls) + "] = " +
                  hex(reinterpret_cast<uint64_t>(seen)) + ", loader block = " + hex(reinterpret_cast<uint64_t>(fsr.tls_block)));
             // A TlsAlloc index names TEB->TlsSlots, a different array: the image would read another module's TLS
-            // block, and their thread-safe statics then fault or not depending on what is there (#93 fixes this).
+            // block, and its thread-safe statics then fault or not depending on what is there (#93 fixes this).
             check(seen == fsr.tls_block, "the image's __declspec(thread) block is the one the loader set up");
             if (seen != fsr.tls_block) return 1;
         }
@@ -746,7 +746,7 @@ int main(int argc, char** argv) {
         // 4. CPU-only queries with the PC struct type ids.
         float ratio = 0.0f;
         ffx::QueryDescUpscaleGetUpscaleRatioFromQualityMode qr{};
-        qr.header.type = ffx::QUERY_DESC_TYPE_GETUPSCALERATIOFROMQUALITYMODE;
+        qr.header.type = ffx::QUERY_DESC_TYPE_UPSCALE_GETUPSCALERATIOFROMQUALITYMODE;
         qr.qualityMode = ffx::QUALITY_MODE_PERFORMANCE;
         qr.pOutUpscaleRatio = &ratio;
         c = guarded_query(query, nullptr, &qr.header);
@@ -757,7 +757,7 @@ int main(int argc, char** argv) {
 
         uint32_t rw = 0, rh = 0;
         ffx::QueryDescUpscaleGetRenderResolutionFromQualityMode qres{};
-        qres.header.type = ffx::QUERY_DESC_TYPE_GETRENDERRESOLUTIONFROMQUALITYMODE;
+        qres.header.type = ffx::QUERY_DESC_TYPE_UPSCALE_GETRENDERRESOLUTIONFROMQUALITYMODE;
         qres.displayWidth = 3840;
         qres.displayHeight = 2160;
         qres.qualityMode = ffx::QUALITY_MODE_QUALITY;

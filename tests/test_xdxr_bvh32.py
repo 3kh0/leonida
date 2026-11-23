@@ -64,6 +64,19 @@ class TreeKeepsLeafHits(unittest.TestCase):
                 self.assertIsNotNone(got)
                 self.assertEqual((got["primitive"], got["t"]), (1, leaf["t"]))
 
+    def test_paired_leaves(self):
+        # build_blas(pair=True) puts two triangles in one leaf record (TRI0 and TRI1): numElements counts triangle
+        # references, not records, so the leaf brute force must walk the records up to offsetToNodes
+        cube = closed_cube()
+        data, info = X.build_blas(cube, pair=True)
+        self.assertLess(info["leaves"], info["triangles"])
+        mem = X.Memory()
+        mem.place(BASE, data)
+        rays = B.edge_rays(cube, 300, random.Random(11))
+        for o, d in rays[:40]:
+            self.assertEqual(B.leaves32(mem, BASE, o, d) is None, B.trace32(mem, BASE, o, d) is None, (o, d))
+        self.assertEqual(len(B.lost_hits(mem, BASE, rays)), 0)
+
     def test_edge_and_vertex_rays(self):
         for name, tris in (("pair", PAIR), ("closed cube", closed_cube())):
             mem = placed(tris)

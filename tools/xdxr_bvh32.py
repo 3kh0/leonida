@@ -207,9 +207,11 @@ def trace32(mem, bvh_va, org, d, tmax=INF, box_rounding="nearest"):
 def leaves32(mem, bvh_va, org, d, tmax=INF):
     """Closest hit over every leaf of the BLAS at bvh_va, no boxes: what its tree must not lose."""
     inv = inverse_dir32(d)
-    n, elements = mem.u32(bvh_va + 12)[0], mem.u32(bvh_va + 52)[0]
+    # numElements counts triangle references; a paired record (TRI0 + TRI1) holds two, so walk the 64-byte leaf
+    # records from offsetToElements up to offsetToNodes instead
+    nodes, elements = mem.u32(bvh_va + 40)[0], mem.u32(bvh_va + 52)[0]
     hit = None
-    for e in range(n):
+    for e in range((nodes - elements) // 64):
         off = elements + 64 * e
         kinds = [X.TRI0] + ([X.TRI1] if mem.u32(bvh_va + off + 56)[0] != X.INVALID else [])
         for kind in kinds:

@@ -97,6 +97,40 @@ class HeapIndexCensus(unittest.TestCase):
                                 ("user s11", "ptr32", "S#", "dynamic"): 1})
         self.assertEqual(g["static_offsets"]["T#"], {"aligned32": 1, "max": 0x1660})
 
+    def test_sampler_word_provenance(self):
+        sample = PS_HEAP[-2]
+        self.work.add("ps_words", "ps", SFI0_SMP, [
+            sample,  # entry SGPRs
+            ("s_load_dwordx8 s[40:47], s[0:1], 0", 8),
+            ("s_mov_b64 s[28:29], s[44:45]", 4),
+            ("s_mov_b64 s[30:31], s[46:47]", 4),
+            sample,  # consecutive slice of one wider load through aliases
+            ("s_mov_b32 s31, s46", 4),
+            sample,  # repeated word of the right load
+            ("s_load_dwordx4 s[28:31], s[0:1], 0", 8),
+            ("s_mov_b32 s31, s47", 4),
+            sample,  # first word still matches, last comes from another load
+            ("s_mov_b32 s31, 0", 4),
+            sample,  # literal overwrite
+            ("s_endpgm", 4),
+        ])
+        group = hic.census(self.work.disasm)["groups"]["ps sfi0=smp"]
+        self.assertEqual(group["sampler_load_provenance"], {"complete": 1, "partial_mixed": 3, "non_load": 1})
+        self.assertEqual(group["sampler_loaded_words"], [4, 4, 4, 3])
+        self.assertTrue(any(row["role"] == "S#" for row in group["loads"]))
+
+    def test_sampler_word_at_branch_join(self):
+        for source, expected in [("s31", "complete"), ("s30", "unknown")]:
+            with self.subTest(source=source):
+                self.work.add("ps_join", "ps", SFI0_SMP, [
+                    ("s_load_dwordx4 s[28:31], s[0:1], 0", 8),
+                    ("s_cbranch_scc0 1", 4),
+                    (f"s_mov_b32 s31, {source}", 4),
+                    *PS_HEAP[-2:],
+                ])
+                group = hic.census(self.work.disasm)["groups"]["ps sfi0=smp"]
+                self.assertEqual(group["sampler_load_provenance"], {expected: 1})
+
     def test_compute_sgpr_past_user_count_is_system(self):
         # COMPUTE_PGM_RSRC2 USER_SGPR = 2: s0..s1 are user data, s2 is the first system SGPR.
         self.work.add("cs_sys", "cs", SFI0_RES, [

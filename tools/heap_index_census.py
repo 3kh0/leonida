@@ -22,6 +22,12 @@ dynamic, and the result's role (T#, S#, V#) comes from the instruction that cons
 loads per stage and SFI0 class, so the heap base shows up as the input SGPR the loads of heap-indexing shaders
 start from, and as the difference to the shaders that use only descriptor tables.
 
+sampler_load_provenance counts reachable sampling instructions once each. complete means four consecutive
+dwords of one static scalar load instruction (including slices of wider loads). partial_mixed requires a
+known loaded word and evidence against a contiguous origin. non_load means every word is a known constant
+or entry SGPR. All remaining cases, including inconclusive control-flow joins, are unknown.
+sampler_loaded_words counts instructions with a direct load tag at each of the four operand positions.
+
 It reads only the listings, the DXBC containers next to them (`<disasm>/../<name>.dxbc`), the carve index
 (`<disasm>/../index.json`, for the stage) and, for compute shaders, COMPUTE_PGM_RSRC2 at FSSM header word 0x138
 (`<disasm>/../fssm/<name>.fssm`, as tools/rdna2spirv.py does). It prints counts only, no shader bytes.
@@ -248,7 +254,18 @@ def step(sym, ins, on_load=None, on_use=None):
             sym.pop(r, None)
 
 
-def analyse(insns, stage, user_count):
+def sampler_load_provenance(tags):
+    # Subtract the operand position so slices of wider loads and register aliases compare equally.
+    origins = {(tag[1], tag[2] - i) for i, tag in enumerate(tags) if tag and tag[0] == "ld"}
+    non_load = sum(1 for tag in tags if tag and tag[0] in ("const", "in"))
+    if len(origins) > 1 or (origins and non_load):
+        return "partial_mixed"
+    if origins and all(tag and tag[0] == "ld" for tag in tags):
+        return "complete"
+    return "non_load" if non_load == 4 else "unknown"
+
+
+def analyse(insns, stage, user_count, sampler_counts=None):
     """Descriptor loads of one shader: [{"op", "base", "ptr", "offset", "roles"}], in code order."""
     blocks, succ = blocks_of(insns)
     system = set(SYSTEM_SGPRS.get(stage, ()))
@@ -306,6 +323,12 @@ def analyse(insns, stage, user_count):
         for ins in blocks[b]:
             if shader_meta.base_op(ins["op"]) == "s_endpgm":
                 break
+            if sampler_counts is not None and ins["op"].startswith(shader_meta.SAMPLER_IMAGE_OPS):
+                args = ins["args"]
+                slots = shader_meta._sgpr_slots(args[3], 4, exact=False) if len(args) >= 4 else None
+                tags = [shader_meta._slot_tag(sym, slot) for slot in slots] if slots else [None] * 4
+                loaded = tuple(i for i, tag in enumerate(tags) if tag and tag[0] == "ld")
+                sampler_counts[sampler_load_provenance(tags), loaded] += 1
             step(sym, ins, on_load, on_use)
     return [loads[pc] for pc in sorted(loads)]
 
@@ -333,6 +356,7 @@ def census(disasm_dir, limit=None, progress=None, stages=None):
     load_rows = defaultdict(Counter)                     # (stage, sfi0) -> (base, ptr, role, offset kind) -> loads
     static_align = defaultdict(Counter)                  # (stage, sfi0, role) -> "aligned32"/"aligned16"/"other"
     static_max = defaultdict(int)                        # (stage, sfi0, role) -> largest static offset
+    sampler_counts = defaultdict(Counter)
     for k, name in enumerate(names):
         if progress and k % 2000 == 0:
             progress(k, len(names))
@@ -355,7 +379,7 @@ def census(disasm_dir, limit=None, progress=None, stages=None):
                 skipped["no FSSM header"] += 1
                 continue
         try:
-            loads = analyse(info["insns"], stage, user)
+            loads = analyse(info["insns"], stage, user, sampler_counts[(stage, sfi0)])
         except Skip as e:
             skipped[str(e)] += 1
             continue
@@ -376,8 +400,16 @@ def census(disasm_dir, limit=None, progress=None, stages=None):
     out = {"shaders_read": len(names), "skipped": dict(skipped), "groups": {}}
     for key in sorted(shaders):
         stage, sfi0 = key
+        classes = Counter()
+        loaded_words = [0] * 4
+        for (kind, positions), count in sampler_counts[key].items():
+            classes[kind] += count
+            for i in positions:
+                loaded_words[i] += count
         g = {
             "shaders": shaders[key],
+            "sampler_load_provenance": dict(classes),
+            "sampler_loaded_words": loaded_words,
             "shaders_with_descriptor_loads": with_loads[key],
             "shaders_per_base": dict(base_shaders[key].most_common()),
             "loads": [{"base": b, "ptr": p, "role": r, "offset": o, "count": c}
@@ -399,6 +431,10 @@ def print_report(out, top=6):
             print(f"  load {row['base']:<22} {row['ptr']:<14} {row['role']:<6} {row['offset']:<8} {row['count']:>7}")
         for role, st in g["static_offsets"].items():
             print(f"  static {role:<6} " + ", ".join(f"{k} {v}" for k, v in st.items()))
+        if g.get("sampler_load_provenance"):
+            print("  sampler load provenance: " + ", ".join(
+                f"{kind} {n}" for kind, n in sorted(g["sampler_load_provenance"].items())))
+            print(f"  sampler loaded words [0..3]: {g['sampler_loaded_words']}")
 
 
 def main(argv=None):

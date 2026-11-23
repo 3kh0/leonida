@@ -117,6 +117,29 @@ class TestVAddNcU32SIMD(unittest.TestCase):
         for l in range(32):
             self.assertEqual(results[l], l * 120)
 
+class TestVAddNcU32Translator(unittest.TestCase):
+    def test_translator_v_add_nc_u32_execution(self) -> None:
+        body = [
+            "v_mov_b32_e32 v1, 1000",
+            "v_mov_b32_e32 v2, 337",
+            "v_add_nc_u32_e32 v3, v1, v2",
+            "buffer_store_dword v3, v30, s[0:3], 0 offen",
+        ]
+        results = run_cs(body, name="cs_v_add_nc_u32")
+        for l in range(32):
+            self.assertEqual(results[l], 1337)
+
+    def test_translator_v_add_nc_u32_clamp(self) -> None:
+        body = [
+            "v_mov_b32_e32 v1, 0xffffffff",
+            "v_mov_b32_e32 v2, 50",
+            "v_add_nc_u32 v3, v1, v2 clamp",
+            "buffer_store_dword v3, v30, s[0:3], 0 offen",
+        ]
+        results = run_cs(body, name="cs_v_add_nc_u32_clamp")
+        for l in range(32):
+            self.assertEqual(results[l], 0xFFFFFFFF)
+
 
 if __name__ == "__main__":
     unittest.main()

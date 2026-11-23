@@ -1,4 +1,5 @@
-// Compute PSOs from the FidelityFX DLL's FSPX programs (docs/fspx.md, "Run-time lookup"), with synthetic inputs:
+// Compute PSOs from the FidelityFX DLL's FSPX programs (docs/fspx.md, "Build and run-time lookup"), with synthetic
+// inputs:
 //   - device slot 62 (the Xbox shape) with a DXBC container whose ACCC part is an FSPX payload, what the DLL passes
 //     when slot 67 fails;
 //   - CreateComputePipelineState with a bare kind-6 program, what the slot-67 description carries at +0x28 and what

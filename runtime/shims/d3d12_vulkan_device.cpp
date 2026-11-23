@@ -3422,7 +3422,7 @@ public:
         }
         if (!push_constants_fit()) return E_NOTIMPL;
         // The game's FSSM program, or the FidelityFX DLL's FSPX kind-6 program: in a DXBC container's ACCC part at
-        // slot 62, bare from a slot-67 description (docs/fspx.md, "Run-time lookup").
+        // slot 62, bare from a slot-67 description (docs/fspx.md, "Build and run-time lookup").
         const leonida::ComputeProgram program = leonida::compute_program(
             {static_cast<const std::uint8_t*>(desc.CS.pShaderBytecode), desc.CS.BytecodeLength});
         if (program.kind == leonida::ComputeProgram::Kind::none) {

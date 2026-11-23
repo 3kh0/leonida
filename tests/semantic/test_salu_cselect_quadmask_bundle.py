@@ -292,6 +292,28 @@ class TestSQuadmaskB32Translator(unittest.TestCase):
         words = mrt0_words(spv)
         self.assertEqual(words, [0x55, 0x1, 0x55, 0x1])
 
+def ref_s_quadmask_b64(s0_lo: int, s0_hi: int) -> tuple[int, int, int]:
+    val = ((s0_hi & MASK32) << 32) | (s0_lo & MASK32)
+    res = 0
+    for i in range(16):
+        nibble = (val >> (4 * i)) & 0xF
+        if nibble != 0:
+            res |= (1 << i)
+    scc = 1 if res != 0 else 0
+    return res & 0xFFFF, 0, scc
+
+
+class TestSQuadmaskB64Reference(unittest.TestCase):
+    def test_ref_quadmask_b64_nonzero(self):
+        r_lo, r_hi, scc = ref_s_quadmask_b64(0x01020408, 0x01020408)
+        self.assertEqual(r_lo, 0x5555)
+        self.assertEqual(r_hi, 0)
+        self.assertEqual(scc, 1)
+
+    def test_ref_quadmask_b64_zero(self):
+        r_lo, r_hi, scc = ref_s_quadmask_b64(0, 0)
+        self.assertEqual((r_lo, r_hi, scc), (0, 0, 0))
+
 
 if __name__ == "__main__":
     unittest.main()

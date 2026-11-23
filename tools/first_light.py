@@ -924,11 +924,11 @@ def main(argv=None) -> int:
         with open(prepared_manifest, "w", encoding="utf-8", newline="\n") as f:
             json.dump(manifest, f, indent=1)
         previous_preview = os.path.join(manifest_staging, "image.ppm")
-        # Replacing a file refuses a directory that appears during preparation.
-        with open(previous_preview, "xb"):
-            pass
+        # Only copy and unlink files here. On Windows, replace can move a
+        # directory into the staging folder and expose it to recursive cleanup.
         try:
-            os.replace(preview, previous_preview)
+            shutil.copy2(preview, previous_preview, follow_symlinks=False)
+            os.unlink(preview)
         except FileNotFoundError:
             preview_staged = False
         else:

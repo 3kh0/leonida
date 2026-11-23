@@ -86,23 +86,39 @@ class FirstLightMeshDrawTests(unittest.TestCase):
         self.assertEqual(raw.read_bytes(), b"previous draw")
         self.assertEqual(manifest.read_bytes(), previous)
 
-    def test_prepare_preserves_a_directory_created_during_preview_move(self) -> None:
+    def test_prepare_preserves_a_directory_created_during_preview_invalidation(self) -> None:
         self.prepare()
         manifest = self.out / "manifest.json"
         previous = manifest.read_bytes()
         raw = self.out / "image.raw"
         raw.write_bytes(b"previous draw")
         preview = self.out / "image.ppm"
+        preview.write_bytes(b"previous preview")
         marker = preview / "keep.txt"
         replace = first_light.os.replace
+        unlink = first_light.os.unlink
 
-        def create_directory_before_move(src, dst):
-            if Path(src) == preview:
-                preview.mkdir()
-                marker.write_bytes(b"keep")
+        def substitute_directory() -> None:
+            unlink(preview)
+            preview.mkdir()
+            marker.write_bytes(b"keep")
+
+        def replace_like_windows(src, dst):
+            if src == str(preview):
+                substitute_directory()
+                # Native Windows allowed the directory to replace the placeholder.
+                Path(dst).unlink(missing_ok=True)
             return replace(src, dst)
 
-        with patch.object(first_light.os, "replace", side_effect=create_directory_before_move):
+        def unlink_after_substitution(path, *args, **kwargs):
+            if path == str(preview):
+                substitute_directory()
+            return unlink(path, *args, **kwargs)
+
+        with (
+            patch.object(first_light.os, "replace", side_effect=replace_like_windows),
+            patch.object(first_light.os, "unlink", side_effect=unlink_after_substitution),
+        ):
             with self.assertRaises(OSError):
                 self.prepare("--width", "8")
 

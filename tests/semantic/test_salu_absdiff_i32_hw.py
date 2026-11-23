@@ -313,5 +313,39 @@ class TestAbsdiffRegisterPreservation(unittest.TestCase):
         self.assertEqual(words[3], 0x4444)
 
 
+class TestAbsdiffConditionCodesAndSCC(unittest.TestCase):
+    """Commit 6: condition codes, status flags, and carry/borrow generation for s_absdiff_i32."""
+
+    def test_scc_set_to_one_on_nonzero_diff(self):
+        lines = [
+            "s_mov_b32 s0, 10",
+            "s_mov_b32 s1, 20",
+            "s_absdiff_i32 s2, s0, s1",
+            "s_cselect_b32 s3, 0xAAAA, 0xBBBB",
+            "v_mov_b32 v0, s2",
+            "v_mov_b32 v1, s3",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+        ]
+        words = run_absdiff_ps(lines, "ps_absdiff_scc_one")
+        self.assertEqual(words[0], 10)
+        self.assertEqual(words[1], 0xAAAA)
+
+    def test_scc_set_to_zero_on_zero_diff(self):
+        lines = [
+            "s_mov_b32 s0, 20",
+            "s_mov_b32 s1, 20",
+            "s_absdiff_i32 s2, s0, s1",
+            "s_cselect_b32 s3, 0xAAAA, 0xBBBB",
+            "v_mov_b32 v0, s2",
+            "v_mov_b32 v1, s3",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+        ]
+        words = run_absdiff_ps(lines, "ps_absdiff_scc_zero")
+        self.assertEqual(words[0], 0)
+        self.assertEqual(words[1], 0xBBBB)
+
+
 if __name__ == '__main__':
     unittest.main()

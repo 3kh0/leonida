@@ -383,6 +383,30 @@ std::vector<Case> cases() {
              e.list2->WriteBufferImmediate(1, &p, nullptr);
              return true;
          }},
+        {"WriteBufferImmediate at an address that is not 4-aligned (DEFAULT)", false, match,
+         [](Env& e) {
+             if (!e.list2) return false;
+             const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER p{e.buffer->GetGPUVirtualAddress() + 2, 7};
+             const D3D12_WRITEBUFFERIMMEDIATE_MODE m = D3D12_WRITEBUFFERIMMEDIATE_MODE_DEFAULT;
+             e.list2->WriteBufferImmediate(1, &p, &m);
+             return true;
+         }},
+        {"WriteBufferImmediate at an address that is not 4-aligned (MARKER_IN)", false, match,
+         [](Env& e) {
+             if (!e.list2) return false;
+             const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER p{e.buffer->GetGPUVirtualAddress() + 2, 7};
+             const D3D12_WRITEBUFFERIMMEDIATE_MODE m = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_IN;
+             e.list2->WriteBufferImmediate(1, &p, &m);
+             return true;
+         }},
+        {"WriteBufferImmediate at an address that is not 4-aligned (MARKER_OUT)", false, match,
+         [](Env& e) {
+             if (!e.list2) return false;
+             const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER p{e.buffer->GetGPUVirtualAddress() + 2, 7};
+             const D3D12_WRITEBUFFERIMMEDIATE_MODE m = D3D12_WRITEBUFFERIMMEDIATE_MODE_MARKER_OUT;
+             e.list2->WriteBufferImmediate(1, &p, &m);
+             return true;
+         }},
     };
 }
 

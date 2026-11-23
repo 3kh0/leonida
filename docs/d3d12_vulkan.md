@@ -2455,8 +2455,10 @@ The trace will enumerate them.
   `TRANSFER`/`TRANSFER_WRITE`). `MARKER_IN` only needs earlier commands to have started. Vulkan cannot express
   that, because `TOP_OF_PIPE` in a first synchronisation scope is no stage at all, so it gets an execution-only
   `ALL_COMMANDS` → `TRANSFER` dependency: stricter than D3D12 requires, never weaker. Recording refuses a null
-  or unaligned address and an unknown mode (the debug layer's `WRITEBUFFERIMMEDIATE_*` messages, IDs 1090-1092 in
-  `d3d12sdklayers.h`).
+  address, an unknown mode, and an unaligned address when `pModes` is non-null (matching Windows D3D12/WARP, which
+  rejects explicit `DEFAULT`/`MARKER_IN`/`MARKER_OUT` unaligned writes with `E_INVALIDARG` at `Close()` while
+  accepting unaligned writes when `pModes == nullptr`). Unaligned null-`pModes` writes are rejected at replay with
+  `invalid_copy` before `vkCmdUpdateBuffer` (`VUID-vkCmdUpdateBuffer-dstOffset-00032`).
 - `AtomicCopyBufferUINT` / `AtomicCopyBufferUINT64` (D3D-26) → one `vkCmdCopyBuffer` region of 4 or 8 bytes, after
   a `ALL_COMMANDS`/`MEMORY_WRITE` → `TRANSFER`/`TRANSFER_READ|WRITE` barrier. That barrier covers every earlier
   write, those to the dependent resources among them, so the copy sees them all, as D3D12 requires. The dependent

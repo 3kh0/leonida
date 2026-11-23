@@ -7224,14 +7224,19 @@ int main() {
             EXPECT(word == 0xCAFEBABEu);
             placed_rb->Unmap(0, nullptr);
 
-            // Unaligned WriteBufferImmediate closes cleanly (matching D3D12/WARP) and is rejected at replay before
-            // vkCmdUpdateBuffer (VUID-vkCmdUpdateBuffer-dstOffset-00032).
+            // Unaligned WriteBufferImmediate with null pModes closes cleanly (matching D3D12/WARP) and is rejected at
+            // replay before vkCmdUpdateBuffer (VUID-vkCmdUpdateBuffer-dstOffset-00032); explicit pModes rejects at
+            // Close() with E_INVALIDARG.
             EXPECT(SUCCEEDED(placed_allocator->Reset()) && SUCCEEDED(placed_list->Reset(placed_allocator.p, nullptr)));
             const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER unaligned_wp{placed_va + 2, 0x12345678u};
-            placed_list2->WriteBufferImmediate(1, &unaligned_wp, &wm);
+            placed_list2->WriteBufferImmediate(1, &unaligned_wp, nullptr);
             EXPECT(placed_list->Close() == S_OK);
             queue->ExecuteCommandLists(1, placed_lists);
             EXPECT(rt::d3d12::last_execute_result(queue.p) == leonida::ReplayResult::invalid_copy);
+
+            EXPECT(SUCCEEDED(placed_allocator->Reset()) && SUCCEEDED(placed_list->Reset(placed_allocator.p, nullptr)));
+            placed_list2->WriteBufferImmediate(1, &unaligned_wp, &wm);
+            EXPECT(placed_list->Close() == E_INVALIDARG);
         }
 
         // The heap owns the range: releasing it puts the next heap of that size back at the same place.

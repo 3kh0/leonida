@@ -109,14 +109,68 @@ def read_before_write(insns):
     return read_s, read_v
 
 
-def survey(dxbc_dir):
-    with open(os.path.join(dxbc_dir, "index.json"), encoding="utf-8") as f:
+def _matching_input(dxbc_dir, out_path):
+    """Return the protected input path that writing ``out_path`` would truncate, or ``None``."""
+    out_real = os.path.normcase(os.path.realpath(out_path))
+    try:
+        out_stat = os.stat(out_path)
+    except OSError:
+        out_stat = None
+    for input_path in _protected_inputs(dxbc_dir):
+        if os.path.normcase(os.path.realpath(input_path)) == out_real:
+            return input_path
+        if out_stat is not None:
+            try:
+                if os.path.samestat(os.stat(input_path), out_stat):
+                    return input_path
+            except OSError:
+                pass
+    return None
+
+
+def _vs_names(dxbc_dir):
+    """Shader stems for vertex shaders listed in ``dxbc_dir/index.json``."""
+    index_path = os.path.join(dxbc_dir, "index.json")
+    with open(index_path, encoding="utf-8") as f:
         index = json.load(f)
-    if not isinstance(index, list) or not all(isinstance(e, dict) for e in index):
-        raise ValueError("index.json is not a list of shader entries")
-    if not all(isinstance(e.get("file"), str) for e in index if e.get("stage") == "vs"):
-        raise ValueError("index.json has a vertex shader entry without a string file")
-    names = [os.path.splitext(e["file"])[0] for e in index if e.get("stage") == "vs"]
+    if not isinstance(index, list):
+        raise ValueError(f"{index_path}: expected a JSON array, got {type(index).__name__}")
+    names = []
+    for i, entry in enumerate(index):
+        if not isinstance(entry, dict):
+            raise ValueError(f"{index_path}: entry {i} is not a JSON object")
+        if entry.get("stage") != "vs":
+            continue
+        file_name = entry.get("file")
+        if not isinstance(file_name, str) or not file_name:
+            raise ValueError(f"{index_path}: entry {i} is missing string 'file'")
+        names.append(os.path.splitext(file_name)[0])
+    return names
+
+
+def _protected_inputs(dxbc_dir):
+    """Folders and source files in `dxbc_dir` read by `survey()`."""
+    paths = [dxbc_dir, os.path.join(dxbc_dir, "index.json")]
+    disasm = os.path.join(dxbc_dir, "disasm")
+    if os.path.exists(disasm):
+        paths.append(disasm)
+        if os.path.isdir(disasm):
+            for entry in os.scandir(disasm):
+                if entry.name.lower().endswith(".s") and entry.is_file():
+                    paths.append(entry.path)
+            try:
+                vs_names = _vs_names(dxbc_dir)
+            except (OSError, ValueError):
+                vs_names = ()
+            for n in vs_names:
+                asm_path = os.path.join(disasm, n + ".s")
+                if os.path.isfile(asm_path):
+                    paths.append(asm_path)
+    return paths
+
+
+def survey(dxbc_dir):
+    names = _vs_names(dxbc_dir)
     markers, vgprs, families = Counter(), Counter(), Counter()
     missing = 0
     for n in names:
@@ -153,14 +207,25 @@ def main():
     ap.add_argument("dxbc", help="<work>/shaders/dxbc from make_game.py")
     ap.add_argument("--json", help="also write the counts as JSON")
     a = ap.parse_args()
-    index_path = os.path.join(a.dxbc, "index.json")
-    if a.json and os.path.exists(a.json) and os.path.exists(index_path) and os.path.samefile(a.json, index_path):
-        print(f"vs_input_survey: error: --json would overwrite the input {index_path}", file=sys.stderr)
+    if not os.path.isdir(a.dxbc):
+        what = "is not a folder" if os.path.exists(a.dxbc) else "does not exist"
+        print(f"ERROR: {a.dxbc} {what}", file=sys.stderr)
         return 2
+    if a.json:
+        if os.path.isdir(a.json):
+            print(f"ERROR: --json is a folder, not a file: {a.json}", file=sys.stderr)
+            return 2
+        collision = _matching_input(a.dxbc, a.json)
+        if collision is not None:
+            print(f"ERROR: --json would overwrite the input {collision}", file=sys.stderr)
+            return 2
     try:
         r = survey(a.dxbc)
-    except (OSError, ValueError) as e:  # missing or non-folder <dxbc>, unreadable, non-UTF-8 or malformed index.json
-        print(f"vs_input_survey: error: cannot read {index_path}: {e}", file=sys.stderr)
+    except (OSError, ValueError) as e:
+        strerror = getattr(e, "strerror", None)
+        filename = getattr(e, "filename", None)
+        detail = f"{strerror}: {filename}" if strerror and filename else (strerror or e)
+        print(f"ERROR: cannot survey {a.dxbc}: {detail}", file=sys.stderr)
         return 2
     m = r["markers"]
     print(f"{r['vertex_shaders']} vertex shaders ({r['missing_listings']} without a listing)")
@@ -172,10 +237,14 @@ def main():
     print("layout:", "legacy (non-NGG) VS" if legacy else "NGG markers present: check the VS input layout")
     if a.json:
         try:
+            parent = os.path.dirname(os.path.abspath(a.json))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
             with open(a.json, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(r, f, indent=1)
+                f.write("\n")
         except OSError as e:
-            print(f"vs_input_survey: error: cannot write {a.json}: {e.strerror or e}", file=sys.stderr)
+            print(f"ERROR: cannot write {a.json}: {e.strerror or e}", file=sys.stderr)
             return 2
     return 0
 

@@ -72,7 +72,7 @@ def test_vs_input_survey():
         with open(os.path.join(dx, "disasm", "a_vs.s"), "a", encoding="utf-8") as f:
             f.write("\texp prim v0, off, off, off done\n")
         out = subprocess.run([sys.executable, "-I", os.path.join(ROOT, "scripts", "vs_input_survey.py"), dx],
-                             capture_output=True, text=True)
+                             capture_output=True, text=True, errors="replace")
         check(out.returncode == 0 and "exp prim 1" in out.stdout and "NGG markers present" in out.stdout,
               "a primitive export flips the verdict away from legacy")
         check("a_vs" not in out.stdout and "c_vs" not in out.stdout, "the summary prints counts, not shader names")
@@ -81,7 +81,8 @@ def test_vs_input_survey():
     tool = os.path.join(ROOT, "scripts", "vs_input_survey.py")
 
     def cli(*args):
-        return subprocess.run([sys.executable, "-I", tool, *args], capture_output=True, text=True)
+        return subprocess.run([sys.executable, "-I", tool, *args],
+                              capture_output=True, text=True, errors="replace")
 
     with tempfile.TemporaryDirectory() as tmp:
         d = os.path.join(tmp, "dxbc")
@@ -118,10 +119,105 @@ def test_vs_input_survey():
     assert failures == 0, f"{failures} vs_input_survey check(s) failed"
 
 
+def test_vs_input_survey_error_handling_and_json_guards():
+    tool = os.path.join(ROOT, "scripts", "vs_input_survey.py")
+
+    def run(*args):
+        return subprocess.run([sys.executable, "-I", tool, *args], capture_output=True, text=True, errors="replace")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = os.path.join(tmp, "missing")
+        r = run(missing)
+        check(r.returncode == 2 and "does not exist" in r.stderr and "Traceback" not in r.stderr,
+              "missing dxbc folder exits 2 without traceback")
+
+        bad_inputs = (
+            ("absent", None),
+            ("malformed", b"{oops"),
+            ("bad_utf8", b"\xff\xfe[]"),
+            ("object_root", b"{}"),
+            ("non_dict_entry", b"[1]"),
+            ("missing_file", b'[{"stage": "vs"}]'),
+        )
+        for label, payload in bad_inputs:
+            sub = os.path.join(tmp, f"case_{label}")
+            os.makedirs(sub)
+            if payload is not None:
+                with open(os.path.join(sub, "index.json"), "wb") as f:
+                    f.write(payload)
+            res = run(sub)
+            check(res.returncode == 2 and "ERROR:" in res.stderr and "Traceback" not in res.stderr,
+                  f"bad index.json ({label}) exits 2 with ERROR")
+            if label == "absent":
+                check("index.json" in res.stderr, "missing index.json names index.json in stderr")
+
+        dx = build(os.path.join(tmp, "valid"))
+        idx_path = os.path.join(dx, "index.json")
+        asm_path = os.path.join(dx, "disasm", "a_vs.s")
+        hard_idx = os.path.join(tmp, "hard_index.json")
+        try:
+            os.link(idx_path, hard_idx)
+        except OSError:
+            hard_idx = None
+        if os.name != "nt" and (not hasattr(os, "geteuid") or os.geteuid() != 0):
+            os.chmod(asm_path, 0)
+            try:
+                unreadable = run(dx)
+                check(unreadable.returncode == 2 and "a_vs.s" in unreadable.stderr
+                      and "Traceback" not in unreadable.stderr,
+                      "unreadable listing names the listing path in stderr")
+            finally:
+                os.chmod(asm_path, 0o644)
+        upper_case_dir = os.path.join(tmp, "upper_case")
+        os.makedirs(os.path.join(upper_case_dir, "disasm", "sub"), exist_ok=True)
+        with open(os.path.join(upper_case_dir, "index.json"), "w", encoding="utf-8") as f:
+            f.write('[{"stage": "vs", "file": "demo.dxbc"}, {"stage": "vs", "file": "sub/nested.dxbc"}]')
+        upper_listing = os.path.join(upper_case_dir, "disasm", "demo.S")
+        nested_listing = os.path.join(upper_case_dir, "disasm", "sub", "nested.s")
+        for listing in (upper_listing, nested_listing):
+            with open(listing, "w", encoding="utf-8", newline="\n") as f:
+                f.write("\ts_endpgm\n")
+        for dx_arg, target in (
+            (dx, idx_path),
+            (dx, asm_path),
+            (dx, dx),
+            (dx, os.path.join(dx, "disasm")),
+            (upper_case_dir, upper_listing),
+            (upper_case_dir, nested_listing),
+            *(((dx, hard_idx),) if hard_idx is not None else ()),
+        ):
+            before = None
+            if os.path.isfile(target):
+                with open(target, "rb") as f:
+                    before = f.read()
+            res = run(dx_arg, "--json", target)
+            check(res.returncode == 2 and "Traceback" not in res.stderr,
+                  f"--json refuses overwriting/directory target {os.path.basename(target)}")
+            if before is not None:
+                with open(target, "rb") as f:
+                    check(f.read() == before, f"protected input bytes preserved for {os.path.basename(target)}")
+
+        nested = os.path.join(tmp, "reports", "sub", "survey.json")
+        ok = run(dx, "--json", nested)
+        check(ok.returncode == 0 and os.path.isfile(nested), "--json creates missing parent folders")
+
+        blocker = os.path.join(tmp, "blocker")
+        with open(blocker, "wb") as f:
+            f.write(b"keep")
+        fail_out = run(dx, "--json", os.path.join(blocker, "survey.json"))
+        check(fail_out.returncode == 2 and "cannot write" in fail_out.stderr and "Traceback" not in fail_out.stderr,
+              "unwritable --json path reports ERROR without traceback")
+        with open(blocker, "rb") as f:
+            check(f.read() == b"keep", "blocker file left intact")
+
+    assert failures == 0, f"{failures} vs_input_survey check(s) failed"
+
+
 if __name__ == "__main__":
-    try:
-        test_vs_input_survey()
-    except AssertionError:
-        pass
+    for fn in (test_vs_input_survey, test_vs_input_survey_error_handling_and_json_guards):
+        try:
+            fn()
+        except AssertionError:
+            pass
     print(f"test_vs_input_survey: {'OK' if not failures else 'FAILED'} ({failures} failure{'s' if failures != 1 else ''})")
     sys.exit(1 if failures else 0)

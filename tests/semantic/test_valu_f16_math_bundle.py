@@ -146,5 +146,19 @@ class VFractF16ScalarInterpreterTests(unittest.TestCase):
         res = oracle_fract_f16(f16_to_u16(2.5))
         self.assertEqual(res, F16_POS_HALF)
 
+class VFractF16SimdDivergenceTests(unittest.TestCase):
+    def test_fract_simd_exec_masking(self):
+        wave = WavefrontSimdState(lane_count=32)
+        wave.exec_mask = 0x55555555  # Even lanes active
+        for i in range(32):
+            wave.set_vgpr(i, 0xEEEE)
+            if (wave.exec_mask >> i) & 1:
+                wave.set_vgpr(i, oracle_fract_f16(f16_to_u16(float(i) + 0.25)))
+        for i in range(32):
+            if (0x55555555 >> i) & 1:
+                self.assertEqual(wave.get_vgpr(i), f16_to_u16(0.25))
+            else:
+                self.assertEqual(wave.get_vgpr(i), 0xEEEE)
+
 if __name__ == "__main__":
     unittest.main()

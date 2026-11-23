@@ -71,5 +71,71 @@ class TestReferenceOracle(unittest.TestCase):
         got = ds_read_b32_ref(self.lds, 0x20, offset=LDS_DEFAULT_SIZE)
         self.assertEqual(got, 0xDDCCBBAA)
 
+class RegType(enum.Enum):
+    VGPR = "v"
+    SGPR = "s"
+
+
+class RegSingle:
+    def __init__(self, reg_type: RegType, index: int) -> None:
+        self.reg_type = reg_type
+        self.index = index
+
+    def __repr__(self) -> str:
+        return f"{self.reg_type.value}{self.index}"
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, RegSingle):
+            return False
+        return self.reg_type == other.reg_type and self.index == other.index
+
+
+class DSReadB32Inst:
+    def __init__(self, vdst: RegSingle, vaddr: RegSingle, offset: int = 0) -> None:
+        self.vdst = vdst
+        self.vaddr = vaddr
+        self.offset = offset
+
+    def emit_asm(self) -> str:
+        if self.offset != 0:
+            return f"ds_read_b32 {self.vdst}, {self.vaddr} offset:{self.offset}"
+        return f"ds_read_b32 {self.vdst}, {self.vaddr}"
+
+
+def parse_ds_read_b32(line: str) -> DSReadB32Inst:
+    line = line.strip()
+    match = re.match(r"^ds_read_b32\s+(v\d+),\s*(v\d+)(?:\s+offset:(\d+|0x[0-9a-fA-F]+))?$", line)
+    if not match:
+        raise ValueError(f"Invalid ds_read_b32 syntax: {line}")
+    vdst_str, vaddr_str, off_str = match.groups()
+    vdst = RegSingle(RegType.VGPR, int(vdst_str[1:]))
+    vaddr = RegSingle(RegType.VGPR, int(vaddr_str[1:]))
+    offset = int(off_str, 0) if off_str is not None else 0
+    if offset < 0 or offset > 0xFFFF:
+        raise ValueError(f"Offset out of 16-bit range: {offset}")
+    return DSReadB32Inst(vdst, vaddr, offset)
+
+
+class TestASTDefinitions(unittest.TestCase):
+    def test_ast_construction_and_emit(self) -> None:
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 8), RegSingle(RegType.VGPR, 1), 64)
+        self.assertEqual(inst.emit_asm(), "ds_read_b32 v8, v1 offset:64")
+
+    def test_ast_construction_zero_offset(self) -> None:
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 4), RegSingle(RegType.VGPR, 2), 0)
+        self.assertEqual(inst.emit_asm(), "ds_read_b32 v4, v2")
+
+    def test_parse_valid_assembler(self) -> None:
+        inst = parse_ds_read_b32("ds_read_b32 v12, v3 offset:0x80")
+        self.assertEqual(inst.vdst, RegSingle(RegType.VGPR, 12))
+        self.assertEqual(inst.vaddr, RegSingle(RegType.VGPR, 3))
+        self.assertEqual(inst.offset, 128)
+
+    def test_parse_invalid_registers(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_ds_read_b32("ds_read_b32 s0, v1")
+        with self.assertRaises(ValueError):
+            parse_ds_read_b32("ds_read_b32 v0, s1")
+
 if __name__ == "__main__":
     unittest.main()

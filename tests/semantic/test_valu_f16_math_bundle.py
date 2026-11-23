@@ -140,5 +140,11 @@ class VFractF16AstTests(unittest.TestCase):
         self.assertEqual(ast.dst.index, 1)
         self.assertEqual(ast.src0.index, 0)
 
+class VFractF16ScalarInterpreterTests(unittest.TestCase):
+    def test_fract_scalar_execution(self):
+        # fract(2.5) = 0.5 (0x3800)
+        res = oracle_fract_f16(f16_to_u16(2.5))
+        self.assertEqual(res, F16_POS_HALF)
+
 if __name__ == "__main__":
     unittest.main()

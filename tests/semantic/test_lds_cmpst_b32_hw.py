@@ -418,6 +418,48 @@ class TestRegisterAliasing(unittest.TestCase):
         mem = run_cs_lds(instructions)
         self.assertEqual(mem.get(0), 0x55555555)
 
+@dataclass
+class IntegerStatusFlags:
+    zero: bool = False
+    negative: bool = False
+
+
+def classify_integer_status(val: int) -> IntegerStatusFlags:
+    val &= MASK32
+    return IntegerStatusFlags(
+        zero=(val == 0),
+        negative=bool(val & 0x80000000),
+    )
+
+
+class TestConditionCodesAndStatus(unittest.TestCase):
+    def test_vcc_and_scc_preservation(self):
+        interp = ScalarLDSInterpreter()
+        interp.regs.scc = 1
+        interp.regs.vcc = 0x123456789ABCDEF0
+        interp.regs.vgprs[0] = 0
+        interp.regs.vgprs[1] = 0
+        interp.regs.vgprs[2] = 1
+
+        insn = DSCmpStB32Instruction(
+            vaddr=Operand.vgpr(0),
+            vcmp=Operand.vgpr(1),
+            vsrc=Operand.vgpr(2),
+        )
+        interp.step(insn)
+
+        self.assertEqual(interp.regs.scc, 1)
+        self.assertEqual(interp.regs.vcc, 0x123456789ABCDEF0)
+
+    def test_status_flag_classification(self):
+        s_zero = classify_integer_status(0)
+        self.assertTrue(s_zero.zero)
+        self.assertFalse(s_zero.negative)
+
+        s_neg = classify_integer_status(0x80000000)
+        self.assertFalse(s_neg.zero)
+        self.assertTrue(s_neg.negative)
+
 
 if __name__ == "__main__":
     unittest.main()

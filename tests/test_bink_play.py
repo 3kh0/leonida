@@ -1,4 +1,5 @@
 """tools/bink_play.py: name matching and the name-table cache. Synthetic names only, no game files."""
+import os
 import sys
 import tempfile
 import unittest
@@ -93,6 +94,34 @@ class FindExeTest(unittest.TestCase):
             with self.assertRaises(SystemExit) as cm:
                 bink_play.find_exe(None)
         self.assertIn("bink_play.exe not found", str(cm.exception))
+
+    def test_a_bare_name_on_path_is_resolved(self):
+        # The merge base handed a bare name to subprocess, which finds it on PATH; keep that.
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "bink_play.exe"
+            exe.write_bytes(b"MZ\x90\x00")
+            exe.chmod(0o755)
+            with mock.patch.dict(os.environ, {"PATH": d}):
+                self.assertEqual(bink_play.find_exe("bink_play.exe"), exe)
+
+    def test_a_bare_name_not_on_path_gives_the_hint(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"PATH": d}):
+                with self.assertRaises(SystemExit) as cm:
+                    bink_play.find_exe("bink_play.exe")
+            self.assertIn("is not a file", str(cm.exception))
+
+    def test_an_explicit_relative_path_is_not_a_path_lookup(self):
+        # "./name" is a typed path, not a bare command; a missing one keeps the diagnostic even when
+        # the same name sits on PATH.
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "bink_play.exe"
+            exe.write_bytes(b"MZ\x90\x00")
+            exe.chmod(0o755)
+            with mock.patch.dict(os.environ, {"PATH": d}):
+                with self.assertRaises(SystemExit) as cm:
+                    bink_play.find_exe("./bink_play.exe")
+            self.assertIn("is not a file", str(cm.exception))
 
 
 class PlayTest(unittest.TestCase):

@@ -133,7 +133,7 @@ commit 和 `tools/rpf9dump` 的源码）。其中任何一项改变时，只重�
   `python3 -I make_game.py --runtime-build ~/Downloads/runtime-windows`。
   两种方式都会把 `gta6rt.exe` 和 `gta6rt_tls_host.dll` 复制到 `--out`，并在旁边生成 `gta6rt.sh`，
   用 `wine`（或 `WINE` 指定的 Proton）启动。`pipelines` 阶段使用 `vk_pipeline_check`（需要 CMake 3.24+、C++20
-  编译器和 Vulkan 开发头文件，构建到 `runtime/build/linux`；缺少时脚本会在其他工作之前自行构建）。
+  编译器和 Vulkan 开发头文件，构建到 `runtime/build/linux`（也接受 `runtime/build`）；缺少时脚本会在其他工作之前自行构建）。
 
 ## 常见问题
 

@@ -343,6 +343,13 @@ class CandidateSelectionTest(unittest.TestCase):
         self.assertEqual(AB.select_candidates({}, self.disasm, self.spirv, loops="only", names_file=names),
                          ["not_in_index", "filtered_out"])
 
+    def test_names_file_saved_with_a_bom_keeps_no_bom_in_the_first_name(self):
+        names = os.path.join(self.tmp.name, "names-bom.txt")
+        with open(names, "w", encoding="utf-8-sig") as f:  # what PowerShell 5.1 Set-Content writes
+            f.write("not_in_index\nfiltered_out\n")
+        self.assertEqual(AB.select_candidates({}, self.disasm, self.spirv, names_file=names),
+                         ["not_in_index", "filtered_out"])
+
     def test_count_limits_the_automatic_selection(self):
         index = {name: self.shader() for name in ("c", "b", "a")}
         for name in index:

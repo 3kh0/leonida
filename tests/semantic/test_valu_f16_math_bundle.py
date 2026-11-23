@@ -216,5 +216,11 @@ class VFrexpExpI16F16OracleTests(unittest.TestCase):
         # 0.25: 0.25 = 0.5 * 2^-1 -> exp is -1 (0xFFFF)
         self.assertEqual(oracle_frexp_exp_i16_f16(f16_to_u16(0.25)), (-1) & MASK16)
 
+class VFrexpExpI16F16AstTests(unittest.TestCase):
+    def test_frexp_exp_ast_construction(self):
+        ast = F16InstructionAST("v_frexp_exp_i16_f16", Operand(RegKind.VGPR, 1), Operand(RegKind.VGPR, 0))
+        self.assertEqual(ast.mnemonic, "v_frexp_exp_i16_f16")
+        self.assertEqual(ast.dst.index, 1)
+
 if __name__ == "__main__":
     unittest.main()

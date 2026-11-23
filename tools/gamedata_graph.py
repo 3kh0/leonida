@@ -212,20 +212,24 @@ def resolve_parent_paths(root) -> dict:
 def parent_chains(links: list) -> tuple:
     """Return (depth histogram over the linked children, cycle count) for one document's links."""
     parent = dict(links)
-    depths = Counter()
-    cycles = 0
+    depth_by_node = {}
     for child in parent:
-        seen = {child}
-        node, depth = child, 0
-        while node in parent:
+        if child in depth_by_node:
+            continue
+        path = []
+        node = child
+        while node in parent and node not in depth_by_node:
+            # A repeat on this walk, like an already resolved cycle, has no finite depth.
+            depth_by_node[node] = None
+            path.append(node)
             node = parent[node]
-            depth += 1
-            if node in seen:
-                cycles += 1
-                break
-            seen.add(node)
-        else:
-            depths[depth] += 1
+        depth = depth_by_node.get(node, 0)  # an unlinked parent is a root
+        if depth is not None:
+            for node in reversed(path):
+                depth += 1
+                depth_by_node[node] = depth
+    depths = Counter(depth_by_node.values())
+    cycles = depths.pop(None, 0)
     return depths, cycles
 
 

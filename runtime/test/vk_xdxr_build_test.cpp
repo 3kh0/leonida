@@ -6,9 +6,10 @@
 //
 // Cases: one triangle; five (two levels); 1000 random triangles; an indexed R16 grid with a 16-byte vertex stride;
 // R32 indices with R32G32 vertices; a geometry transform; two geometries with an inactive (NaN) triangle; no
-// triangles; two triangles sharing an edge and a closed cube (edge and vertex rays); 5000 triangles (many radix-sort
-// tiles); updates (refits) in place and into another buffer; clones and a
-// compaction (CopyRaytracingAccelerationStructure) with the postbuild size; a TLAS of four instances (rotated and scaled, one with mask 0, one with no BLAS).
+// triangles; two triangles sharing an edge (their root boxes must be padded off their plane) and a closed cube
+// (edge and vertex rays); 5000 triangles (many radix-sort tiles); updates (refits) in place and into another buffer;
+// clones and a compaction (CopyRaytracingAccelerationStructure) with the postbuild size; a TLAS of four instances
+// (rotated and scaled, one with mask 0, one with no BLAS).
 // Exit 77 when there is no Vulkan device with bufferDeviceAddress.
 // `vk_xdxr_build_test <out dir> <triangles>` instead times BLAS builds of that many random triangles (wall clock of
 // one submission each, after one warm-up; result and scratch in device-local memory), then in-place updates
@@ -24,6 +25,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <random>
 #include <string>
 #include <vector>
@@ -71,6 +73,30 @@ bool write_file(const std::string& path, const void* data, std::size_t bytes) {
     std::ofstream f(path, std::ios::binary);
     f.write(static_cast<const char*>(data), std::streamsize(bytes));
     return bool(f);
+}
+
+// The BOX32 boxes under the root of a dumped BLAS whose triangles lie in the plane z = 0 must be padded off that plane
+// (xdxr_build.comp BOX_PAD): unpadded, a ray through an edge on a box face can be cut by the box of the triangle the
+// edge rule gives it to. check-build traces such rays; this fails on the builder's own output when the pad is gone.
+bool flat_root_boxes_padded(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    const std::vector<char> b{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+    std::uint32_t root = 0;
+    if (b.size() < 64) return false;
+    std::memcpy(&root, b.data() + 48, 4);
+    const std::size_t node = std::size_t(root >> 3) * 64;
+    if ((root & 7u) != 5u || node + 112 > b.size()) return false;             // a BOX32 node inside the buffer
+    int boxes = 0;
+    for (int i = 0; i < 4; ++i) {
+        std::uint32_t child = 0;
+        float box[6];
+        std::memcpy(&child, b.data() + node + 4 * i, 4);
+        std::memcpy(box, b.data() + node + 16 + 24 * i, sizeof box);
+        if (child == 0xffffffffu) continue;
+        if (!(box[2] < 0.0f && box[5] > 0.0f)) return false;
+        ++boxes;
+    }
+    return boxes > 0;
 }
 
 std::string tris_json(const std::vector<Tri>& tris) {
@@ -363,6 +389,7 @@ int main(int argc, char** argv) {
     };
     Built shared, cube;
     if (build_blas(gpu, builder, dir, "watertight_shared_edge", {pair}, shared)) return 1;
+    EXPECT(flat_root_boxes_padded(dir + "/watertight_shared_edge.bin"));
     if (build_blas(gpu, builder, dir, "watertight_closed_cube", {closed_cube(4, 2.0f)}, cube)) return 1;
     // many radix-sort tiles (RADIX_TILE elements each), the last one partial (fewer rays: the brute force is slow)
     Built tiles;

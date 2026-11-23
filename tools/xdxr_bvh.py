@@ -780,9 +780,17 @@ def _load_case(directory, name):
     return desc, data
 
 
-def check_build(directory, rays=300, seed=1, edge_rays=200, box_rounding="nearest"):
+# Box padding keeps edge rays near the origin only (docs/bvh.md 7a): the pad is 16 to 32 float32 steps of the box's
+# largest coordinate, and the slab test rounds plane - origin to steps of the origin's. Once origins are some 30 times
+# farther out than the mesh, edge rays are lost again (#5092: a 1 m grid seen from 200 m loses 6 of 300). check-build
+# counts such rays from origins within +-far_spread and prints them; they are not a failure.
+FAR_SPREAD = 1000.0
+
+
+def check_build(directory, rays=300, seed=1, edge_rays=200, box_rounding="nearest", far_spread=FAR_SPREAD):
     """Validate every <case>.bin of a GPU build and trace rays against brute force; for a BLAS, also check with
-    tools/xdxr_bvh32.py that edge and vertex rays lose no hit in the tree. Returns a list of problems."""
+    tools/xdxr_bvh32.py that edge and vertex rays lose no hit in the tree, and report (only) those lost from far
+    origins. Returns a list of problems."""
     import os
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import xdxr_bvh32 as bvh32
@@ -843,10 +851,15 @@ def check_build(directory, rays=300, seed=1, edge_rays=200, box_rounding="neares
             # rays through vertices and edges, traced with the float32 step: the tree must keep every hit its
             # leaves give (a ray on an edge that lies on a box face, docs/bvh.md 7a box padding)
             count = min(edge_rays, max(10, 150000 // max(1, len(desc["triangles"]))))
-            lost = bvh32.lost_hits(mem, desc["address"], bvh32.edge_rays([t[:3] for t in desc["triangles"]], count,
-                                                                  random.Random(f"edge:{seed}:{n}")),
-                                   box_rounding)
+            tris3 = [t[:3] for t in desc["triangles"]]
+            lost = bvh32.lost_hits(mem, desc["address"],
+                                   bvh32.edge_rays(tris3, count, random.Random(f"edge:{seed}:{n}")), box_rounding)
             lost_note = f", {len(lost)}/{count} edge rays lost by the tree (float32, box rounding {box_rounding})"
+            if far_spread:
+                far_count = max(5, count // 2)
+                far = bvh32.lost_hits(mem, desc["address"], bvh32.edge_rays(tris3, far_count, random.Random(
+                    f"far:{seed}:{n}"), far_spread), box_rounding)
+                lost_note += f"; far origins (to +-{far_spread:g}, reported only): {len(far)}/{far_count} lost"
             if lost:
                 o, d, got, want = lost[0]
                 problems.append(f"{n}: {len(lost)} of {count} edge rays miss in the tree but hit a leaf "
@@ -926,6 +939,8 @@ def main(argv=None):
     c.add_argument("--edge-rays", type=int, default=200, help="BLAS rays through vertices and edges (0: none)")
     c.add_argument("--box-rounding", choices=("nearest", "zero"), default="nearest",
                    help="float32 slab rounding of the box test: the translator on main, or RDNA2's (#4957)")
+    c.add_argument("--far-spread", type=float, default=FAR_SPREAD,
+                   help="also count edge rays lost from origins within +-this, reported, not failed (0: none)")
     a = ap.parse_args(argv)
     if a.cmd == "check-build":
         if a.rays < 1:
@@ -933,7 +948,8 @@ def main(argv=None):
         if not _case_names(a.dir):
             print(f"no cases in {a.dir}: skipped (the build step skipped or did not run)")
             return 77                                   # ctest SKIP_RETURN_CODE
-        problems = check_build(a.dir, a.rays, edge_rays=a.edge_rays, box_rounding=a.box_rounding)
+        problems = check_build(a.dir, a.rays, edge_rays=a.edge_rays, box_rounding=a.box_rounding,
+                               far_spread=a.far_spread)
         for e in problems:
             print(e)
         print("all cases match" if not problems else f"{len(problems)} problems")

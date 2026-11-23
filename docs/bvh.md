@@ -549,11 +549,20 @@ extent instead does not hold far from the origin, where one float32 step of a co
 times 2^-19. RDNA2's slab rounding toward zero (#4957) loses more rays through exact boxes than rounding to nearest,
 and none through padded ones.
 
+The padding makes shared edges watertight for ray origins near the mesh only. The slab test rounds plane - origin to
+float32 steps of the ray origin's magnitude, and the pad is a fixed number of steps of the box's: once the ray origin
+is some 30 times farther out than the box's largest coordinate, rays through shared edges are lost again (#5092, on
+an RTX 3090: a 32 x 32 floor of 1 m quads seen from 200 m loses 6 of 300 edge rays; a grid with origins within +-1000
+loses 26 of 300). Holding at any distance needs the slab test widened in proportion to t in the translator, as robust
+traversal does (tmax times 1 + 2 gamma_3), which is not done.
+
 `tools/xdxr_bvh32.py` runs the step with float32 rounding after every operation, as the translator's NoContraction
 SPIR-V does, and compares a whole BLAS traversal with a brute force over every leaf of the same buffer.
 `xdxr_bvh.py check-build` traces rays through the vertices and edges of every BLAS case with it (`--edge-rays`, and
-`--box-rounding zero` for #4957's rule) and fails on a hit the tree loses; `vk_xdxr_build_test` adds
-`watertight_shared_edge` (two triangles) and `watertight_closed_cube`. `tests/test_xdxr_bvh32.py` checks the CPU builder the same
+`--box-rounding zero` for #4957's rule) and fails on a hit the tree loses; it also counts the edge rays lost from
+origins within +-1000 (`--far-spread`) and only prints them. `vk_xdxr_build_test` adds `watertight_shared_edge` (two
+triangles, whose root boxes it checks are padded off their plane) and `watertight_closed_cube`; only check-build
+traces the edge rays, so run `xdxr_build_check` too. `tests/test_xdxr_bvh32.py` checks the CPU builder the same
 way and checks the model against the translator's words on a ray through a shared edge.
 
 Not done yet: pairing triangles into TRI1 leaves, BOX16 nodes, serialization. A higher-quality build (SAH) would also

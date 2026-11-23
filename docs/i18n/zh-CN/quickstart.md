@@ -104,8 +104,9 @@ commit 和 `tools/rpf9dump` 的源码）。其中任何一项改变时，只重�
 
 - **`--wave64-emulate`**：决定是否把 wave64 compute/mesh 着色器翻译成在任意子组宽度下都精确的版本
   （见 [`docs/design.md`](../../design.md) 中 Wave64 emulation 一行）。NVIDIA 和 Intel GPU 是 32 lane 子组，
-  需要它。默认 `auto` 会询问 `vulkaninfo`（属于 Vulkan SDK），除非所有 GPU 都报告 64 宽子组、或无法判断，
-  都会启用；运行时实际使用的 GPU 无法以 64 宽运行 compute/mesh 时也会启用。有一个例外会让它保持关闭：当运行时的
+  需要它。默认 `auto` 会询问 `vulkaninfo`（属于 Vulkan SDK）：只要任意 GPU 不是 64 宽子组、或其子组宽度无法
+  判断，就会启用；它还会检查运行时实际使用的 GPU 能否以 64 宽运行 compute/mesh 着色器（使用 `--mesh-compute`
+  时只需 compute 的子组支持）。有一个例外会选择原生 wave64（不模拟）：当运行时的
   GPU 是 RDNA2 独显或核显（RX 6000、Ryzen 6000/7000/9000 的核显）、使用 AMD Windows 驱动并原生运行 wave64 时
   ——该驱动的着色器编译器在模拟 LDS 代码上会崩溃（#857）；否则 Intel 核显搭配 RX 6000 卡时也会被启用。
   该模式会保存在翻译后的着色器旁边，切换它会重新翻译。使用 `auto` 时通常可以复用之前模拟翻译的着色器；上述 AMD

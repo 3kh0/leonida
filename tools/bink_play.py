@@ -80,7 +80,12 @@ def pick(names, wanted):
 
 def find_exe(explicit):
     if explicit:
-        return Path(explicit)
+        p = Path(explicit)
+        if not p.is_file():
+            # Handing this to subprocess would end in a FileNotFoundError traceback over a typed path.
+            raise SystemExit(f"{p} is not a file; build the runtime (runtime/build/bink_play.exe) "
+                             "or point --exe at the built one")
+        return p
     root = HERE.parent
     for c in (root / "runtime" / "build" / "bink_play.exe", root / "runtime" / "build" / "Release" / "bink_play.exe"):
         if c.is_file():

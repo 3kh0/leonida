@@ -203,5 +203,16 @@ class VDot2F32F16TranslatorIntegrationTests(unittest.TestCase):
         res_add = f32_to_bits(4.0)
         self.assertNotEqual(res_dot, res_add)
 
+class VDot2cF32F16OracleTests(unittest.TestCase):
+    """Reference mathematical oracle tests for v_dot2c_f32_f16."""
+
+    def test_accumulation_into_destination(self):
+        s0 = pack_f16x2(1.0, 2.0)
+        s1 = pack_f16x2(3.0, 4.0)
+        old_d = f32_to_bits(10.0)
+        # 1*3 + 2*4 + 10 = 3 + 8 + 10 = 21.0
+        res = ref_dot2_f32_f16(s0, s1, old_d)
+        self.assertAlmostEqual(bits_to_f32(res), 21.0)
+
 if __name__ == "__main__":
     unittest.main()

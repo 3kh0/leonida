@@ -230,6 +230,24 @@ class TestVFmaakF32ASTAndInterpreter(unittest.TestCase):
         words = run_bundle_ps(lines, "ps_exec_v_fmaak_f32")
         self.assertEqual(words[0], 0x40E00000)
 
+class TestVFmaakF32InlineConstant(unittest.TestCase):
+    """Stage 3 for v_fmaak_f32: inline constant literal addend binding."""
+
+    def test_v_fmaak_f32_inline_constants(self):
+        constants = [
+            (0x40000000, 0x40400000, 0x3F800000, 0x40E00000),  # 2.0 * 3.0 + 1.0 = 7.0
+            (0x40800000, 0x40000000, 0xC0000000, 0x40C00000),  # 4.0 * 2.0 - 2.0 = 6.0
+        ]
+        for s0, s1, k, expected in constants:
+            with self.subTest(s0=hex(s0), s1=hex(s1), k=hex(k)):
+                lines = [
+                    f"v_mov_b32 v1, {s0:#x}",
+                    f"v_mov_b32 v2, {s1:#x}",
+                    f"v_fmaak_f32 v0, v1, v2, {k:#x}",
+                ]
+                words = run_bundle_ps(lines, f"ps_fmaak_k_{k:#x}")
+                self.assertEqual(words[0], expected)
+
 
 if __name__ == '__main__':
     unittest.main()

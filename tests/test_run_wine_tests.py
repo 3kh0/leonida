@@ -419,6 +419,14 @@ class WineDebuggerTest(unittest.TestCase):
     def enter(self):
         return rwt.WineDebugger(self.wine, str(self.prefix))
 
+    def test_the_printed_restore_command_uses_the_wine_of_the_run(self):
+        self.set_debugger(self.DEFAULT)
+        dbg = rwt.WineDebugger(["/opt/Proton 9/files/bin/wine"], str(self.prefix))
+        dbg.previous = self.DEFAULT
+        self.assertIn("'/opt/Proton 9/files/bin/wine' reg add", dbg.restore_command())
+        dbg.previous = None
+        self.assertIn("'/opt/Proton 9/files/bin/wine' reg delete", dbg.restore_command())
+
     def test_the_debugger_is_off_during_the_run_and_restored_after(self):
         self.set_debugger(self.DEFAULT)
         with self.enter() as dbg:
@@ -548,8 +556,8 @@ class AbortedTestTest(unittest.TestCase):
         entry = ctest_entry("printed", self.aborting(before="ALL OK"), {"PASS_REGULAR_EXPRESSION": "ALL OK"})
         self.assertEqual(self.run_entry(entry)[0], "fail")
 
-    def test_an_abort_with_a_zero_exit_code_still_fails(self):
-        self.assertEqual(self.run_entry(ctest_entry("zero", self.aborting(code=0)))[0], "fail")
+    def test_a_test_that_exits_zero_after_a_child_crashed_keeps_its_own_verdict(self):
+        self.assertEqual(self.run_entry(ctest_entry("zero", self.aborting(code=0)))[0], "pass")
 
 
 class MainTest(unittest.TestCase):

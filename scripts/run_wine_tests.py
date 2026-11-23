@@ -168,9 +168,13 @@ class WineDebugger:
     def restore_command(self) -> str:
         """The command that puts the prefix back as it was: the default value again, or no value when there was none."""
         if self.previous is not None:
-            return (f'WINEPREFIX="{self.prefix}" wine reg add "{self.KEY}" /v Debugger /t REG_SZ '
+            return (f'WINEPREFIX="{self.prefix}" {self._wine_text()} reg add "{self.KEY}" /v Debugger /t REG_SZ '
                     f'/d "{self.previous}" /f')
-        return f'WINEPREFIX="{self.prefix}" wine reg delete "{self.KEY}" /v Debugger /f'
+        return f'WINEPREFIX="{self.prefix}" {self._wine_text()} reg delete "{self.KEY}" /v Debugger /f'
+
+    def _wine_text(self) -> str:
+        """The wine command this run uses (--wine, $WINE: possibly a Proton path), quoted for a POSIX shell."""
+        return shlex.join(self.wine)
 
     def __exit__(self, *exc):
         if not self.active:
@@ -286,10 +290,13 @@ def run_test(test: dict, args, wine: list[str], *, failed_setups: tuple[str, ...
         # A negative return code is a host-signal termination (e.g. SIGSEGV), not a process exit code:
         # report it as a failure before SKIP_RETURN_CODE or WILL_FAIL can reinterpret it.
         return "fail", f"killed by signal {-code} in {elapsed:.1f} s\n{out}"
-    if ABORTED.search(out):
+    if code != 0 and ABORTED.search(out):
         # Wine's own report of an unhandled exception. Before WineDebugger the crash debugger kept such a process
-        # alive until the timeout, which is a failure whatever WILL_FAIL, the exit code or an output expression say.
-        return "fail", f"aborted by Wine (exit {code} in {elapsed:.1f} s)\n{out}"
+        # alive until the timeout, which is a failure whatever WILL_FAIL or an output expression say. Wine ends an
+        # aborted process with a non-zero code. A test that exits 0 with this line in its output ran a child that
+        # it expected to crash (queue_proxy_test --child-crash) and judged it itself, so its own verdict stands.
+        return "fail", (f"aborted by Wine (exit {code} in {elapsed:.1f} s; a test that expects a crashed child "
+                        f"fails here too when it exits non-zero)\n{out}")
     skip_code = props.get("SKIP_RETURN_CODE")
     if skip_code is not None and code == int(skip_code):
         return "skip", f"exit {code} (skip) in {elapsed:.1f} s\n{out}"

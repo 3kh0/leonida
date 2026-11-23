@@ -4,8 +4,13 @@
   - SGPR high halves, f16 abs/neg/ordered-vs-unordered NaN.
 
 Usage:
-  powershell -File C:\\Leonida-worktrees\\with-gpu-lock.ps1 "cd C:\\Leonida-worktrees\\w4-cmp16-opsel; python scripts/probe_gfx1036_vcmp16.py"
+  python -I tools/probe_gfx1036_vcmp16.py           # run every probe, both wave sizes
+  python -I tools/probe_gfx1036_vcmp16.py --help
+
+Needs a built runtime/build/vk_compute_test.exe (`cmake --build runtime/build --target vk_compute_test`), llvm-mc
+(LLVM_MC) and an RDNA2 part (`LEONIDA_VK_DEVICE=radeon`). No game files. The row it confirms is in docs/design.md.
 """
+import argparse
 import math
 import os
 import struct
@@ -333,7 +338,7 @@ def test_f16_nan_and_modifiers(wave_size=32):
     print(f"[{name}] ALL NaN & MODIFIER TESTS PASSED on gfx1036 silicon!")
 
 
-def main():
+def probe():
     print("=" * 70)
     print("PROBING GFX1036 SILICON FOR V_CMP(X) 16-BIT OP_SEL & CONSTANTS")
     print("=" * 70)
@@ -362,9 +367,21 @@ def main():
     print("ALL GFX1036 SILICON PROBES (WAVE32 & WAVE64) PASSED WITH ZERO DIVERGENCES!")
     print("=" * 70)
 
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.parse_args(argv)
+    if not os.path.exists(VK_COMPUTE_TEST):
+        print(f"probe_gfx1036_vcmp16: error: vk_compute_test not found at {VK_COMPUTE_TEST}; build it first "
+              "(cmake --build runtime/build --target vk_compute_test)", file=sys.stderr)
+        return 2
+    probe()
+    return 0
+
+
 if __name__ == "__main__":
     try:  # a redirected stdout is strict ANSI code page under -I; write '?' for what it cannot encode
         sys.stdout.reconfigure(errors="replace")
     except (AttributeError, ValueError, OSError):
         pass
-    main()
+    sys.exit(main())

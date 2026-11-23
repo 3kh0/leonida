@@ -59,8 +59,9 @@ class DriveMap:
 
     A test that opens D:/a/Leonida/Leonida/runtime/build/generated/x.spv (a path compiled into it) then reads
     <root>/runtime/build/generated/x.spv. The drive is a dosdevices link to a scratch folder holding a/Leonida/Leonida
-    as a link to the root; both are removed afterwards. A drive the prefix already has (c:, z:, or one set up by
-    hand) is left alone, and so is a root without a drive letter.
+    as a link to the root. The scratch directory is removed afterwards, along with the drive link if it still
+    points at that directory. A drive the prefix already has (c:, z:, or one set up by hand), a mapping replaced
+    during the run, and a root without a drive letter are left alone.
     """
 
     def __init__(self, windows_root: str, root: str, prefix: str):
@@ -100,8 +101,13 @@ class DriveMap:
         return self
 
     def __exit__(self, *exc):
-        if self.link and os.path.islink(self.link):
-            os.unlink(self.link)
+        if self.link:
+            try:
+                owns_link = os.readlink(self.link) == self.scratch
+            except OSError:
+                owns_link = False  # It may have been removed or replaced with a regular file.
+            if owns_link:
+                os.unlink(self.link)
         if self.scratch:
             shutil.rmtree(self.scratch, ignore_errors=True)   # removes the links, never what they point to
         return False

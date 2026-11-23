@@ -374,6 +374,48 @@ class DriveMapTest(unittest.TestCase):
             self.assertIn("no Wine prefix", drive.note)
         with rwt.DriveMap("/home/runner/work", str(self.root), str(self.prefix)) as drive:
             self.assertIn("no drive letter", drive.note)
+
+    def test_a_drive_replaced_during_the_run_is_left_alone(self):
+        other = self.prefix / "replacement"
+        other.mkdir()
+        marker = other / "marker.txt"
+        marker.write_bytes(b"synthetic replacement data")
+        for kind, target in (("symlink", other), ("dangling", self.prefix / "absent"), ("file", None)):
+            with self.subTest(kind=kind):
+                with rwt.DriveMap("D:/a/b", str(self.root), str(self.prefix)) as drive:
+                    scratch = drive.scratch
+                    self.link.unlink()
+                    if target is None:
+                        self.link.write_bytes(b"replacement mapping file")
+                    else:
+                        self.link.symlink_to(target)
+                self.assertTrue(os.path.lexists(self.link))
+                if target is None:
+                    self.assertEqual(self.link.read_bytes(), b"replacement mapping file")
+                else:
+                    self.assertEqual(os.readlink(self.link), str(target))
+                self.assertFalse(os.path.exists(scratch))
+                self.assertEqual(marker.read_bytes(), b"synthetic replacement data")
+                self.link.unlink()
+
+    def test_replaced_mapping_survives_an_error_in_the_body(self):
+        other = self.prefix / "replacement"
+        other.mkdir()
+        with self.assertRaisesRegex(RuntimeError, "synthetic test failure"):
+            with rwt.DriveMap("D:/a/b", str(self.root), str(self.prefix)) as drive:
+                scratch = drive.scratch
+                self.link.unlink()
+                self.link.symlink_to(other)
+                raise RuntimeError("synthetic test failure")
+        self.assertEqual(os.readlink(self.link), str(other))
+        self.assertFalse(os.path.exists(scratch))
+
+    def test_a_drive_removed_during_the_run_only_cleans_scratch(self):
+        with rwt.DriveMap("D:/a/b", str(self.root), str(self.prefix)) as drive:
+            scratch = drive.scratch
+            self.link.unlink()
+        self.assertFalse(os.path.lexists(self.link))
+        self.assertFalse(os.path.exists(scratch))
         self.assertFalse(os.path.lexists(self.link))
 
     def test_main_maps_the_drive_while_the_tests_run(self):

@@ -168,6 +168,20 @@ class TestVFmacF32ASTAndInterpreter(unittest.TestCase):
         words = run_bundle_ps(lines, "ps_exec_v_fmac_f32")
         self.assertEqual(words[0], 0x40E00000)
 
+class TestVFmacF32Accumulator(unittest.TestCase):
+    """Stage 3 for v_fmac_f32: accumulator chaining and operand preservation."""
+
+    def test_v_fmac_f32_chaining(self):
+        lines = [
+            "v_mov_b32 v0, 0x3F800000",  # 1.0
+            "v_mov_b32 v1, 0x40000000",  # 2.0
+            "v_mov_b32 v2, 0x40400000",  # 3.0
+            "v_fmac_f32 v0, v1, v2",     # 1.0 + 2.0 * 3.0 = 7.0
+            "v_fmac_f32 v0, v1, v2",     # 7.0 + 2.0 * 3.0 = 13.0 (0x41500000)
+        ]
+        words = run_bundle_ps(lines, "ps_fmac_chain")
+        self.assertEqual(words[0], 0x41500000)
+
 
 if __name__ == '__main__':
     unittest.main()

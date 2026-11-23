@@ -188,5 +188,115 @@ class TestDSAndB32Oracle(unittest.TestCase):
         self.assertEqual(lds.read_dword(0x100), 0x000F000F)
 
 
+class DSOpcode(str, enum.Enum):
+    DS_AND_B32 = "ds_and_b32"
+    DS_AND_RTN_B32 = "ds_and_rtn_b32"
+
+
+@dataclasses.dataclass(frozen=True)
+class VGPR:
+    index: int
+
+    def __post_init__(self) -> None:
+        if not (0 <= self.index <= 255):
+            raise ValueError(f"VGPR index out of range [0, 255]: {self.index}")
+
+    def __str__(self) -> str:
+        return f"v{self.index}"
+
+
+@dataclasses.dataclass(frozen=True)
+class SGPR:
+    index: int
+
+    def __post_init__(self) -> None:
+        if not (0 <= self.index <= 105):
+            raise ValueError(f"SGPR index out of range [0, 105]: {self.index}")
+
+    def __str__(self) -> str:
+        return f"s{self.index}"
+
+
+@dataclasses.dataclass(frozen=True)
+class OffsetImmediate:
+    value: int
+
+    def __post_init__(self) -> None:
+        if not (0 <= self.value <= 0xFFFF):
+            raise ValueError(f"OffsetImmediate out of range [0, 0xFFFF]: {self.value}")
+
+    def __str__(self) -> str:
+        return f"offset:{self.value}" if self.value != 0 else ""
+
+
+@dataclasses.dataclass(frozen=True)
+class DSAndInstruction:
+    opcode: DSOpcode
+    vaddr: VGPR
+    vdata: VGPR
+    vdst: Optional[VGPR] = None
+    offset: OffsetImmediate = dataclasses.field(default_factory=lambda: OffsetImmediate(0))
+
+    def __post_init__(self) -> None:
+        if self.opcode == DSOpcode.DS_AND_B32 and self.vdst is not None:
+            raise ValueError(f"{self.opcode} must not have a destination register")
+        if self.opcode == DSOpcode.DS_AND_RTN_B32 and self.vdst is None:
+            raise ValueError(f"{self.opcode} requires a destination register")
+
+    def to_asm(self) -> str:
+        off_str = f" {self.offset}" if self.offset.value != 0 else ""
+        if self.opcode == DSOpcode.DS_AND_RTN_B32:
+            return f"{self.opcode.value} {self.vdst}, {self.vaddr}, {self.vdata}{off_str}"
+        return f"{self.opcode.value} {self.vaddr}, {self.vdata}{off_str}"
+
+
+class TestDSAndB32AST(unittest.TestCase):
+    """Commit 2: Symbolic AST opcode definitions and typed expressions."""
+
+    def test_ast_construction_non_returning(self) -> None:
+        inst = DSAndInstruction(
+            opcode=DSOpcode.DS_AND_B32,
+            vaddr=VGPR(1),
+            vdata=VGPR(2),
+            offset=OffsetImmediate(16),
+        )
+        self.assertEqual(inst.opcode, DSOpcode.DS_AND_B32)
+        self.assertEqual(inst.vaddr.index, 1)
+        self.assertEqual(inst.vdata.index, 2)
+        self.assertIsNone(inst.vdst)
+        self.assertEqual(inst.offset.value, 16)
+        self.assertEqual(inst.to_asm(), "ds_and_b32 v1, v2 offset:16")
+
+    def test_ast_construction_returning(self) -> None:
+        inst = DSAndInstruction(
+            opcode=DSOpcode.DS_AND_RTN_B32,
+            vdst=VGPR(5),
+            vaddr=VGPR(1),
+            vdata=VGPR(2),
+            offset=OffsetImmediate(0),
+        )
+        self.assertEqual(inst.opcode, DSOpcode.DS_AND_RTN_B32)
+        self.assertEqual(inst.vdst.index, 5)
+        self.assertEqual(inst.to_asm(), "ds_and_rtn_b32 v5, v1, v2")
+
+    def test_ast_validation_rejects_dst_on_non_returning(self) -> None:
+        with self.assertRaises(ValueError):
+            DSAndInstruction(
+                opcode=DSOpcode.DS_AND_B32,
+                vdst=VGPR(5),
+                vaddr=VGPR(1),
+                vdata=VGPR(2),
+            )
+
+    def test_ast_validation_rejects_missing_dst_on_returning(self) -> None:
+        with self.assertRaises(ValueError):
+            DSAndInstruction(
+                opcode=DSOpcode.DS_AND_RTN_B32,
+                vdst=None,
+                vaddr=VGPR(1),
+                vdata=VGPR(2),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

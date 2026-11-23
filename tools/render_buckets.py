@@ -32,6 +32,51 @@ CHUNK = 8 << 20
 _WS = " \t\r\n"
 
 
+def _count_after_items(f, buf, pos, chunk, dec):
+    """The top-level ``Count`` among the keys that follow the ``Items`` array, or None.
+
+    Parses the remaining members of the top-level object one at a time (a nested ``Count`` inside a later value is
+    not a top-level count), reading more of the file as needed."""
+    def value_at(pos):
+        nonlocal buf
+        while True:
+            try:
+                return dec.raw_decode(buf, pos)
+            except json.JSONDecodeError:
+                more = f.read(chunk)
+                if not more:
+                    raise
+                buf, pos = buf[pos:] + more, 0
+
+    def skip(pos):
+        nonlocal buf
+        while True:
+            while pos < len(buf) and buf[pos] in _WS:
+                pos += 1
+            if pos < len(buf):
+                return pos
+            more = f.read(chunk)
+            if not more:
+                return pos
+            buf, pos = buf[pos:] + more, 0
+
+    count = None
+    while True:
+        pos = skip(pos)
+        if pos >= len(buf) or buf[pos] == "}":
+            return count
+        if buf[pos] == ",":
+            pos += 1
+            continue
+        key, pos = value_at(pos)
+        pos = skip(pos)
+        if pos >= len(buf) or buf[pos] != ":":
+            return count
+        val, pos = value_at(skip(pos + 1))
+        if key == "Count" and isinstance(val, int) and not isinstance(val, bool):
+            count = val
+
+
 def iter_items(path, chunk=CHUNK):
     """Yield the objects of the top-level ``"Items": [...]`` array of a JSON file without loading it whole.
 
@@ -66,6 +111,8 @@ def iter_items(path, chunk=CHUNK):
                     raise ValueError(f"{path}: \"Items\" array is not closed")
                 buf, pos = buf[pos:] + more, 0
             if buf[pos] == "]":
+                if count is None:  # Count may follow Items: read the rest of the top-level object, key by key
+                    count = _count_after_items(f, buf, pos + 1, chunk, dec)
                 return count
             while True:
                 try:

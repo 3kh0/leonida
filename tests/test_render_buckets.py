@@ -47,6 +47,27 @@ class StreamTests(unittest.TestCase):
                 self.assertEqual(got, items, chunk)
                 self.assertEqual(count, 25)
 
+    def test_count_before_or_after_items(self):
+        # review on #4946: a top-level Count after Items must be read too, with the items still streamed
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, text in enumerate(('{"Count": 2, "Items": [{}]}', '{"Items": [{}], "Count": 2}',
+                                      '{"Items": [{}], "Failures": [{"Count": 7}], "Count": 2}',
+                                      '{"Items": [{}], "Failures": [{"Count": 7}]}')):
+                path = os.path.join(tmp, f"m{i}.json")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                want = None if i == 3 else 2       # a nested Count is not the top-level one
+                for chunk in (3, rb.CHUNK):
+                    gen = rb.iter_items(path, chunk)
+                    got = []
+                    while True:
+                        try:
+                            got.append(next(gen))
+                        except StopIteration as stop:
+                            self.assertEqual(stop.value, want, (text, chunk))
+                            break
+                    self.assertEqual(got, [{}])
+
     def test_empty_items(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_manifest(tmp, [])
@@ -146,6 +167,17 @@ class CliTests(unittest.TestCase):
             code, _, err = self.run_cli([path, "--json", path])
             self.assertNotEqual(code, 0)
             self.assertIn("overwrite", err)
+
+    def test_mismatch_with_count_after_items_sets_exit_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "arc", "models")
+            os.makedirs(folder)
+            with open(os.path.join(folder, "manifest.json"), "w", encoding="utf-8") as f:
+                f.write('{"Items": [{}], "Count": 2}')
+            code, out, err = self.run_cli([tmp])
+            self.assertEqual(code, 1)
+            self.assertIn("(Count 2)", out)
+            self.assertIn("Count says 2", err)
 
     def test_mismatch_sets_exit_code(self):
         with tempfile.TemporaryDirectory() as tmp:

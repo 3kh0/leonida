@@ -1,4 +1,5 @@
 """tools/bink_play.py: name matching and the name-table cache. Synthetic names only, no game files."""
+import os
 import sys
 import tempfile
 import threading
@@ -144,6 +145,80 @@ class CacheTest(unittest.TestCase):
                     worker.join()
             self.assertEqual(got, {"first": "Stinger/first.bk2", "second": "Stinger/second.bk2"})
             self.assertEqual(sorted(p.name for p in (d / "cache").iterdir()), ["bink_names.csv"])
+
+
+class FindExeTest(unittest.TestCase):
+    """--exe is a path someone typed. A wrong one should read like the tool's own hint, not a traceback."""
+
+    def test_an_existing_file_is_used_as_given(self):
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "bink_play.exe"
+            exe.write_bytes(b"MZ\x90\x00")
+            self.assertEqual(bink_play.find_exe(str(exe)), exe)
+
+    def test_a_missing_path_names_itself_and_gives_the_hint(self):
+        with tempfile.TemporaryDirectory() as d:
+            gone = Path(d) / "nope" / "bink_play.exe"
+            with self.assertRaises(SystemExit) as cm:
+                bink_play.find_exe(str(gone))
+            self.assertIn(str(gone), str(cm.exception))
+            self.assertIn("build the runtime", str(cm.exception))
+
+    def test_a_folder_is_not_an_executable(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(SystemExit) as cm:
+                bink_play.find_exe(d)
+            self.assertIn("is not a file", str(cm.exception))
+
+    def test_the_default_search_keeps_its_message(self):
+        with mock.patch.object(Path, "is_file", return_value=False):
+            with self.assertRaises(SystemExit) as cm:
+                bink_play.find_exe(None)
+        self.assertIn("bink_play.exe not found", str(cm.exception))
+
+    def test_a_bare_name_on_path_is_resolved(self):
+        # The merge base handed a bare name to subprocess, which finds it on PATH; keep that.
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "bink_play.exe"
+            exe.write_bytes(b"MZ\x90\x00")
+            exe.chmod(0o755)
+            with mock.patch.dict(os.environ, {"PATH": d}):
+                self.assertEqual(bink_play.find_exe("bink_play.exe"), exe)
+
+    def test_a_bare_name_not_on_path_gives_the_hint(self):
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {"PATH": d}):
+                with self.assertRaises(SystemExit) as cm:
+                    bink_play.find_exe("bink_play.exe")
+            self.assertIn("is not a file", str(cm.exception))
+
+    def test_an_explicit_relative_path_is_not_a_path_lookup(self):
+        # "./name" is a typed path, not a bare command; a missing one keeps the diagnostic even when
+        # the same name sits on PATH.
+        with tempfile.TemporaryDirectory() as d:
+            exe = Path(d) / "bink_play.exe"
+            exe.write_bytes(b"MZ\x90\x00")
+            exe.chmod(0o755)
+            with mock.patch.dict(os.environ, {"PATH": d}):
+                with self.assertRaises(SystemExit) as cm:
+                    bink_play.find_exe("./bink_play.exe")
+            self.assertIn("is not a file", str(cm.exception))
+
+
+class PlayTest(unittest.TestCase):
+    """The run itself: a bad --exe reaches subprocess.call, which is where the traceback came from."""
+
+    def test_a_bad_exe_exits_with_the_hint_instead_of_raising(self):
+        with tempfile.TemporaryDirectory() as d:
+            game = Path(d) / "game"
+            game.mkdir()
+            (game / "movies.rpf").write_bytes(b"\x00" * 32)
+            (game / "common.rpf").write_bytes(b"\x00" * 32)
+            with mock.patch.object(bink_play, "load_names", return_value=NAMES), \
+                    mock.patch.object(bink_play.subprocess, "call") as called:
+                with self.assertRaises(SystemExit):
+                    bink_play.main(["INTRO_A", "--game-dir", str(game), "--exe", str(Path(d) / "gone.exe")])
+                called.assert_not_called()
 
 
 if __name__ == "__main__":

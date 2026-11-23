@@ -17,6 +17,7 @@ commit or post them.
 import argparse
 import csv
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -87,7 +88,17 @@ def pick(names, wanted):
 
 def find_exe(explicit):
     if explicit:
-        return Path(explicit)
+        p = Path(explicit)
+        if p.is_file():
+            return p
+        # A bare command name (no directory part) may live on PATH, where subprocess.call would find it.
+        if explicit == p.name:
+            found = shutil.which(explicit)
+            if found:
+                return Path(found)
+        # Handing a missing path to subprocess would end in a FileNotFoundError traceback over a typed path.
+        raise SystemExit(f"{p} is not a file; build the runtime (runtime/build/bink_play.exe) "
+                         "or point --exe at the built one")
     root = HERE.parent
     for c in (root / "runtime" / "build" / "bink_play.exe", root / "runtime" / "build" / "Release" / "bink_play.exe"):
         if c.is_file():

@@ -152,6 +152,22 @@ class StreamTests(unittest.TestCase):
                             self.assertEqual(stop.value, want, (text, chunk))
                             break
 
+    def test_number_cut_at_a_read_boundary(self):
+        # found by shdann on #4980 (same reader): a read that ends at the e of 1e3 must not give 1
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.json")
+            for text in ('{"scale":1e3,"Items":[{}],"Count":1}', '{"Items":[{}],"Count":1,"scale":-1.5E-3}'):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                for chunk in range(1, len(text) + 2):
+                    gen = rb.iter_items(path, chunk)
+                    while True:
+                        try:
+                            next(gen)
+                        except StopIteration as stop:
+                            self.assertEqual(stop.value, 1, (text, chunk))
+                            break
+
     def test_empty_items(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_manifest(tmp, [])

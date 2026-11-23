@@ -36,6 +36,7 @@ CHUNK = 8 << 20
 
 
 _WS_RUN = re.compile(r"[ \t\r\n]*")
+_NUMBER_TAIL = re.compile(r"[0-9eE.+\-]*")
 
 
 class _Stream:
@@ -78,6 +79,11 @@ class _Stream:
             except json.JSONDecodeError:
                 val, end = None, None
             if end is not None and end < len(self.buf):
+                # a number cut at the buffer end decodes as a shorter one ("1e" of "1e3" gives 1): when the number
+                # characters run on to the end of the buffer, read more before accepting it
+                if (isinstance(val, (int, float)) and not isinstance(val, bool)
+                        and _NUMBER_TAIL.match(self.buf, end).end() == len(self.buf) and self.fill()):
+                    continue
                 self.pos = end
                 return val
             if not self.fill():

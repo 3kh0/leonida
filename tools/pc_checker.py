@@ -482,17 +482,23 @@ def detect_gpus() -> list:
                     "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress"])
         try:
             data = json.loads(out) if out else []
-            data = [data] if isinstance(data, dict) else data
         except ValueError:
             data = []
+        if isinstance(data, dict):
+            data = [data]
+        if not isinstance(data, list):
+            return gpus
         vmap = _win_vram_map()
         for d in data:
-            name = (d.get("Name") or "").strip()
+            if not isinstance(d, dict) or not isinstance(d.get("Name"), str):
+                continue
+            name = d["Name"].strip()
             if not name or any(name.lower() == g[0].lower() for g in gpus):
                 continue
             vram = vmap.get(name.lower())
-            if vram is None and d.get("AdapterRAM"):
-                vram = d["AdapterRAM"] / 2**30
+            adapter_ram = d.get("AdapterRAM")
+            if vram is None and type(adapter_ram) is int and 0 < adapter_ram <= 0xffffffff:
+                vram = adapter_ram / 2**30
             gpus.append((name, round(vram) if vram else None))
     elif sys.platform == "darwin":
         out = _run(["system_profiler", "SPDisplaysDataType", "-json"], timeout=20)

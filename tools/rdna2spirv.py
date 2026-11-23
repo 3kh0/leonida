@@ -1438,7 +1438,7 @@ class Gen:
         lane_masks.step(st, self.cur_ins)
         return st.get("vcc") in lane_masks.MASK_KINDS
 
-    def dst(self, a, val, *, eager=False):
+    def dst(self, a, val, *, eager=False, old=None):
         if a.get("sdwa_dst") and a["k"] == "vgpr":
             val = self.sdwa_dst(a, val)
         if a["k"] == "special" and a["t"] == "null":
@@ -1458,8 +1458,10 @@ class Gen:
                 self.store_reg("vgpr", a["r"], val)
                 return
             p = self.reg_ptr("vgpr", a["r"])
-            old, r = self.tmp(), self.tmp()
-            self.emit(f"{old} = OpLoad %uint {p}")
+            if old is None:
+                old = self.tmp()
+                self.emit(f"{old} = OpLoad %uint {p}")
+            r = self.tmp()
             if eager:
                 mask = self.exec_value()
                 if self.dpp_guard is not None:
@@ -9707,6 +9709,8 @@ class Gen:
                     raise Unsupported(f"v_interp_mov_f32 vertex select {vsel}")
             else:
                 self.interp_pair_src(op, a, ins)
+            step = ins.get("ij_f32_step")
+            old = None
             half16 = self.pixel_interpolants is not None and (self.pixel_interpolants[1] >> attr["a"]) & 1
             if vsel != "p0":
                 # P10 = P1 - P0 and P20 = P2 - P0, the deltas the hardware keeps beside P0 for the p1/p2 pair
@@ -9716,6 +9720,12 @@ class Gen:
                 if half16:
                     raise Unsupported(f"v_interp_mov_f32 vertex select {vsel} of a 16-bit interpolant")
                 f = self.attribute(attr["a"], attr["c"], vertex_delta=1 if vsel == "p10" else 2)
+            elif step is not None:
+                # Reuse P2's incoming word for both operands and for lanes where EXEC preserves it.
+                old = self.load_reg("vgpr", a[0]["r"]) if step == 2 else None
+                acc = self.tof(old) if old is not None else None
+                weight = self.src_f(a[1]) if acc is None else self.modify_f(acc, a[1])
+                f = self.attribute(attr["a"], attr["c"], ij_step=(step, weight, acc))
             else:
                 f = self.attribute(attr["a"], attr["c"], flat=op == "v_interp_mov_f32",
                                    ij=self.interp_weights(ins))
@@ -9724,11 +9734,11 @@ class Gen:
                 # has f16 precision, so round to nearest f16 and back. Reads through the *_f16 opcodes already
                 # narrow to f16 and are unchanged.
                 f = self.f16_roundtrip(f)
-            if op in ("v_interp_p2_f32", "v_interp_mov_f32"):
+            if step is not None or op in ("v_interp_p2_f32", "v_interp_mov_f32"):
                 # VOP3 output modifiers (mul:2 / mul:4 / div:2, clamp) apply to the interpolated result
                 # (LLVM gfx10_asm_vop3.s). No-op when mods has none.
                 f = self.clamp_mods(f, mods)
-            self.dst(a[0], self.tou(f))
+            self.dst(a[0], self.tou(f), old=old)
         elif op == "s_movk_i32":
             v = a[1]["v"] & 0xFFFF
             val = (v - 0x10000 if v & 0x8000 else v) & 0xFFFFFFFF
@@ -12863,7 +12873,7 @@ class Gen:
         self.emit(f"{t} = OpBitcast %float {u}")
         return t
 
-    def attribute(self, n, comp, flat=False, half=None, ij=None, vertex_delta=None):
+    def attribute(self, n, comp, flat=False, half=None, ij=None, vertex_delta=None, *, ij_step=None):
         """Component `comp` of fragment input attribute n (declared as a vec4 Input at Location n).
 
         An attribute in per_vertex is a PerVertexKHR vec4[3] of the producer's raw 32-bit words. For a packed
@@ -12872,6 +12882,8 @@ class Gen:
         BaryCoordKHR.y, .z, or vertex 0's taken when `flat`. `ij` overrides the weights with the given SPIR-V
         values (computed-I/J sites, SHADER-177: the pair the program wrote into the operand registers).
         `vertex_delta` 1/2 returns P1 - P0 / P2 - P0 instead (v_interp_mov_f32 p10/p20; n must be in per_vertex).
+        `ij_step` emits one f32 step for an aliasing pair (SHADER-826): the vertex index (1 or 2),
+        its weight, and the accumulator (None for p1, whose accumulator is P0).
 
         --f16-interp-fallback: an f16 read (`half` 0/1) of an attribute in f16_halves is component `comp` of the smooth
         input at f16_half_location(n, half), which the producer fills with that half decoded to f32 (F16_HALVES).
@@ -12895,7 +12907,8 @@ class Gen:
             return v
         self.cu(3)      # the array length
         pv = []
-        for k in range(1 if flat else 3):
+        vertices = (0, ij_step[0]) if ij_step is not None else range(1 if flat else 3)
+        for k in vertices:
             p, v = self.tmp(), self.tmp()
             self.emit(f"{p} = OpAccessChain %_ptr_Input_float {name} {self.cu(k)} {self.cu(comp)}")
             self.emit(f"{v} = OpLoad %float {p}")
@@ -12905,6 +12918,12 @@ class Gen:
                 self.emit(f"{w} = OpCompositeExtract %float {h2} {half}")
                 v = w
             pv.append(v)
+        if ij_step is not None:
+            _, weight, acc = ij_step
+            delta, result = self.tmp(), self.tmp()
+            self.emit(f"{delta} = OpFSub %float {pv[1]} {pv[0]}")
+            self.emit_fma(result, delta, weight, pv[0] if acc is None else acc)
+            return result
         if flat:
             return pv[0]
         if vertex_delta is not None:
@@ -15317,6 +15336,9 @@ def interp_ij_analysis(insns, g):
         # whose only use is v_interp. Initialize it even if some paths replace it before this site.
         if s["src"] in (0, 1):
             g.frag_inputs[s["src"]] = ("bary_i", "bary_j")[s["src"]]
+        if p1["op"] == "v_interp_p1_f32" and p1["vdst"] == p2["src"] and p1["vdst"] != p1["src"]:
+            # P2 observes p1's partial as J. A p1 that aliases its own source is a separate HALF_LDS case.
+            s["ins"]["ij_f32_step"] = 1 if s is p1 else 2
         attrs.add(s["attr"])
     if attrs and BARY_FALLBACK:
         raise Unsupported("computed I/J pair under --bary-fallback: no PerVertexKHR inputs")

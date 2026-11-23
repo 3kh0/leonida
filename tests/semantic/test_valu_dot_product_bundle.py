@@ -306,5 +306,17 @@ class VDot4I32I8AstInterpreterTests(unittest.TestCase):
         regs["v3"] = res
         self.assertEqual(regs["v3"], 22)
 
+class VDot4I32I8SimdBoundaryTests(unittest.TestCase):
+    """SIMD lane divergence and boundary extremes for v_dot4_i32_i8."""
+
+    def test_simd_divergent_lanes(self):
+        lanes = 64
+        src0 = [0x01010101 for _ in range(lanes)]
+        src1 = [0x01010101 for _ in range(lanes)]
+        accs = [i for i in range(lanes)]
+        out = [ref_dot4_i32_i8(s0, s1, acc) for s0, s1, acc in zip(src0, src1, accs)]
+        for i in range(lanes):
+            self.assertEqual(out[i], 4 + i)
+
 if __name__ == "__main__":
     unittest.main()

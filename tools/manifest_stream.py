@@ -3,7 +3,8 @@
 ``iter_items(path)`` yields each element of the top-level ``"Items"`` array and returns (as the generator's value) the
 top-level ``Count``, wherever it stands in the object, or None. Everything is validated as JSON: the top-level object,
 its separators, and every member's value. Members other than ``Items`` and ``Count`` (``ModelDecodeFailures`` can be
-large) are checked without building them. Invalid input raises ``ValueError``.
+large) are checked without building them. Invalid input raises ``ValueError``, and so do ``NaN``, ``Infinity`` and
+``-Infinity``, which Python's ``json`` would otherwise accept.
 
 The one rule that makes a fixed-size read buffer safe: a decoded value is accepted only when a terminator (``,``,
 ``}``, ``]``, ``:`` after a key, or whitespace) is visible after it, or the file has ended. Otherwise more is read and the same value is
@@ -16,6 +17,11 @@ import re
 CHUNK = 8 << 20
 
 _WS_RUN = re.compile(r"[ \t\r\n]*")
+
+
+def _reject_constant(name):
+    """``json`` accepts ``NaN``, ``Infinity`` and ``-Infinity`` by default; they are not JSON."""
+    raise ValueError(f"{name} is not valid JSON")
 _TERMINATORS = frozenset(",}]: \t\r\n")   # what may follow a complete value (":" only a key string)
 
 
@@ -24,7 +30,7 @@ class Stream:
 
     def __init__(self, f, chunk=CHUNK):
         self.f, self.chunk = f, chunk
-        self.dec = json.JSONDecoder()
+        self.dec = json.JSONDecoder(parse_constant=_reject_constant)
         self.buf, self.pos, self.eof = "", 0, False
 
     def fill(self):

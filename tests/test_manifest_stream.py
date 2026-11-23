@@ -32,6 +32,8 @@ INVALID = [
     '{"Items":[],"F":tru}', '{"Items":[],"F":nul}', '{"Items":[],"F":1.}', '{"Items":[],"F":1e}',
     '{"Items":[],"F":-}', '{"Items":[],"F":"abc}', '{"Items":[],"F":01}', '{"Items":[{}x]}', '{"Items":[],"F":}',
     '{"Count":1.5e,"Items":[]}', '{"Items":[],"Count":"1"', '{"Items":[]',
+    '{"Items":[],"F":[NaN]}', '{"Items":[],"F":Infinity}', '{"Items":[{"a":-Infinity}]}', '{"Count":NaN,"Items":[]}',
+    '{"Items":[],"F":{"a":[1,NaN]}}', '{"Items":[NaN]}',
 ]
 
 
@@ -73,17 +75,20 @@ class EveryReadSize(unittest.TestCase):
                         run(path, chunk)
 
     def test_numbers_split_at_the_default_read_size(self):
-        # the reviewers' shapes: a read of the default size ending after "1.", "1e" or "1E-" of a top-level member
+        # the reviewers' shapes: the default-size read ends inside a top-level number, after "1.", "1e" or "1E-",
+        # with the member before and after Items. The padding is computed from the exact prefix that is written, and
+        # the test checks that the boundary really falls inside the number.
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "m.json")
-            for number, cut in (("1.25", 2), ("1e24", 2), ("1E-2", 3), ("12", 1), ("1e3", 2)):
+            for number, cut in (("1.25", 2), ("1e24", 2), ("1E-2", 3), ("12", 1), ("1e3", 2), ("-0.5e+3", 5)):
                 for before in (True, False):
-                    member = f'"scale":{number}'
-                    head = ('{' + member + ',') if before else '{"Items":[{}],"Count":1,'
-                    pad = ms.CHUNK - len(head) - cut
-                    body = (' ' * pad + member + ',"Items":[{}],"Count":1}') if before else \
-                           (' ' * pad + member + '}')
-                    text = ('{' if before else '{"Items":[{}],"Count":1,') + body
+                    prefix = "{" if before else '{"Items":[{}],"Count":1,'
+                    key = '"scale":'
+                    pad = ms.CHUNK - len(prefix) - len(key) - cut
+                    rest = ',"Items":[{}],"Count":1}' if before else "}"
+                    text = prefix + " " * pad + key + number + rest
+                    self.assertEqual(text[ms.CHUNK - cut:ms.CHUNK], number[:cut], (number, before))
+                    self.assertEqual(text[ms.CHUNK:ms.CHUNK + len(number) - cut], number[cut:], (number, before))
                     with open(path, "w", encoding="utf-8") as f:
                         f.write(text)
                     self.assertEqual(run(path, ms.CHUNK), ([{}], 1), (number, before))

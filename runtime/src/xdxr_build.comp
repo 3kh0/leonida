@@ -62,6 +62,12 @@ const uint TRI0 = 0u, BOX32 = 5u, INSTANCE = 6u;
 const uint REMAP_IDENTITY = 0x09u;
 const uint FLAG_BOTTOM_LEVEL = 0x80000000u, VERSION_2403 = 6u, INST_IDENTITY_ROTATION = 0x80000000u,
            INST_FLAGS_MASK = 0xc0000000u;
+// A child box is written widened outward by BOX_PAD of its largest |coordinate| (tools/xdxr_bvh.py BOX_PAD). The
+// translated box test and triangle test round in float32 apart: without it, a ray on an edge that also lies on the
+// face of the boxes (a flat or axis-aligned mesh, a vertex) can be cut by the box of the triangle the edge rule gives
+// it to, and pass through a closed mesh (docs/bvh.md 7a, box padding). Scratch keeps the exact boxes, so the
+// padding does not grow level by level, and a parent's padded box still holds its children's.
+const float BOX_PAD = 1.9073486328125e-6;          // 2^-19, about 32 float32 steps of the largest coordinate
 
 layout(push_constant) uniform Push {
     uvec2 dst;            // the acceleration structure (header at byte 0)
@@ -432,6 +438,12 @@ void build_node(uint n) {
             if (!box_empty(lo, hi)) { ulo = min(ulo, lo); uhi = max(uhi, hi); }
         }
         store(pc.dst, o + 4u * c, child);
+        if (!box_empty(lo, hi)) {
+            vec3 m = max(abs(lo), abs(hi));
+            float pad = max(max(m.x, m.y), m.z) * BOX_PAD + 1e-30;
+            lo -= vec3(pad);
+            hi += vec3(pad);
+        }
         uint b = o + 16u + 24u * c;
         storef(pc.dst, b, lo.x); storef(pc.dst, b + 4u, lo.y); storef(pc.dst, b + 8u, lo.z);
         storef(pc.dst, b + 12u, hi.x); storef(pc.dst, b + 16u, hi.y); storef(pc.dst, b + 20u, hi.z);

@@ -6,7 +6,8 @@
 //
 // Cases: one triangle; five (two levels); 1000 random triangles; an indexed R16 grid with a 16-byte vertex stride;
 // R32 indices with R32G32 vertices; a geometry transform; two geometries with an inactive (NaN) triangle; no
-// triangles; 5000 triangles (many radix-sort tiles); updates (refits) in place and into another buffer; clones and a
+// triangles; two triangles sharing an edge and a closed cube (edge and vertex rays); 5000 triangles (many radix-sort
+// tiles); updates (refits) in place and into another buffer; clones and a
 // compaction (CopyRaytracingAccelerationStructure) with the postbuild size; a TLAS of four instances (rotated and scaled, one with mask 0, one with no BLAS).
 // Exit 77 when there is no Vulkan device with bufferDeviceAddress.
 // `vk_xdxr_build_test <out dir> <triangles>` instead times BLAS builds of that many random triangles (wall clock of
@@ -330,6 +331,39 @@ int main(int argc, char** argv) {
     b.vertex_data[3 * 3 * 7] = std::nanf("");                    // triangle 7 of geometry 1: inactive
     if (build_blas(gpu, builder, dir, "blas_two_geometries", {a, b}, multi)) return 1;
     if (build_blas(gpu, builder, dir, "blas_empty", {}, empty)) return 1;
+    // A ray through the edge two triangles share must hit one of them (D3D12 watertightness), also where the edge
+    // lies on the face of their boxes: two triangles side by side, and a closed cube of axis-aligned faces. check-build
+    // traces rays through their vertices and edges with the float32 step (tools/xdxr_bvh32.py). Their names sort after
+    // the other cases', so check-build's random rays for those are the same as before they were added.
+    Geometry pair;
+    pair.triangle_count = 2;
+    pair.vertex_data = {0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 2, 0, 0, 1, 1, 0};
+    auto closed_cube = [](std::uint32_t n, float h) {
+        Geometry g;
+        for (int axis = 0; axis < 3; ++axis)
+            for (int side = 0; side < 2; ++side) {
+                const std::uint32_t base = std::uint32_t(g.vertex_data.size() / 3);
+                for (std::uint32_t j = 0; j <= n; ++j)
+                    for (std::uint32_t i = 0; i <= n; ++i) {
+                        float p[3];
+                        p[axis] = side ? h : -h;
+                        p[(axis + 1) % 3] = -h + 2 * h * float(i) / float(n);
+                        p[(axis + 2) % 3] = -h + 2 * h * float(j) / float(n);
+                        g.vertex_data.insert(g.vertex_data.end(), p, p + 3);
+                    }
+                for (std::uint32_t j = 0; j < n; ++j)
+                    for (std::uint32_t i = 0; i < n; ++i) {
+                        const std::uint32_t a = base + j * (n + 1) + i;
+                        const std::uint32_t q[6] = {a, a + 1, a + n + 2, a, a + n + 2, a + n + 1};
+                        g.indices.insert(g.indices.end(), q, q + 6);
+                    }
+            }
+        g.triangle_count = std::uint32_t(g.indices.size() / 3);
+        return g;
+    };
+    Built shared, cube;
+    if (build_blas(gpu, builder, dir, "watertight_shared_edge", {pair}, shared)) return 1;
+    if (build_blas(gpu, builder, dir, "watertight_closed_cube", {closed_cube(4, 2.0f)}, cube)) return 1;
     // many radix-sort tiles (RADIX_TILE elements each), the last one partial (fewer rays: the brute force is slow)
     Built tiles;
     if (build_blas(gpu, builder, dir, "blas_three_sort_tiles", {soup(5000)}, tiles, 200)) return 1;

@@ -126,6 +126,36 @@ def decode_box16(words):
     return v[0:3], v[3:6]
 
 
+# A BOX32 child box is widened outward by BOX_PAD of its largest coordinate magnitude (xdxr_build.comp BOX_PAD):
+# the float32 slab test and the triangle test round apart, and a ray on an edge that also lies on a box face must
+# not be cut by the box of the triangle the edge rule gives it to (docs/bvh.md 7a, box padding).
+BOX_PAD = 2.0 ** -19
+
+
+def _f32_outward(x, up):
+    """x rounded to a float32 no smaller (up) or no larger than x; inf past the range."""
+    try:
+        r = struct.unpack("<f", struct.pack("<f", x))[0]
+    except OverflowError:
+        return math.copysign(INF, x)
+    if (r < x) if up else (r > x):
+        b = struct.unpack("<I", struct.pack("<f", r))[0]
+        if r == 0.0:
+            b = 0x00000001 if up else 0x80000001
+        else:
+            b = b + 1 if (r > 0.0) == up else b - 1
+        r = struct.unpack("<f", struct.pack("<I", b))[0]
+    return r
+
+
+def pad_box32(lo, hi):
+    """The BOX32 bounds written for an exact box: outward by BOX_PAD of its largest |coordinate|. Empty boxes stay."""
+    if not all(lo[c] <= hi[c] for c in range(3)):
+        return lo, hi
+    pad = max(max(abs(x) for x in lo), max(abs(x) for x in hi)) * BOX_PAD + 1e-30
+    return [_f32_outward(x - pad, False) for x in lo], [_f32_outward(x + pad, True) for x in hi]
+
+
 def encode_box16(lo, hi):
     h = [half_round(c, False) for c in lo] + [half_round(c, True) for c in hi]
     return (h[0] | h[1] << 16, h[2] | h[3] << 16, h[4] | h[5] << 16)
@@ -243,7 +273,8 @@ def _write_nodes(buf, inner, node_offsets, child_ptr, child_box, box16, parent_o
             if box16:
                 struct.pack_into("<3I", buf, off + 16 + 12 * i, *encode_box16(lo, hi))
             else:
-                struct.pack_into("<6f", buf, off + 16 + 24 * i, *lo, *hi)
+                plo, phi = pad_box32(lo, hi)
+                struct.pack_into("<6f", buf, off + 16 + 24 * i, *plo, *phi)
 
 
 def _write_parents(buf, parents_off, elements_off, end, parent_of, root_ptr):
@@ -749,8 +780,12 @@ def _load_case(directory, name):
     return desc, data
 
 
-def check_build(directory, rays=300, seed=1):
-    """Validate every <case>.bin of a GPU build and trace rays against brute force. Returns a list of problems."""
+def check_build(directory, rays=300, seed=1, edge_rays=200, box_rounding="nearest"):
+    """Validate every <case>.bin of a GPU build and trace rays against brute force; for a BLAS, also check with
+    tools/xdxr_bvh32.py that edge and vertex rays lose no hit in the tree. Returns a list of problems."""
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import xdxr_bvh32 as bvh32
     names = _case_names(directory)
     if not names:
         return [f"no cases in {directory}"]
@@ -803,7 +838,21 @@ def check_build(directory, rays=300, seed=1):
                 same = (got["instance"], (got["geometry"], got["primitive"])) == (want["instance"], want_id)
                 same = same and math.isclose(got["t"], want["t"], rel_tol=1e-4)
             bad += not same
-        print(f"{n}: {len(data)} bytes, {len(errs)} validation errors, {bad}/{case_rays} rays differ ({hits} hits)")
+        lost_note = ""
+        if desc["kind"] == "blas" and edge_rays:
+            # rays through vertices and edges, traced with the float32 step: the tree must keep every hit its
+            # leaves give (a ray on an edge that lies on a box face, docs/bvh.md 7a box padding)
+            count = min(edge_rays, max(10, 150000 // max(1, len(desc["triangles"]))))
+            lost = bvh32.lost_hits(mem, desc["address"], bvh32.edge_rays([t[:3] for t in desc["triangles"]], count,
+                                                                  random.Random(f"edge:{seed}:{n}")),
+                                   box_rounding)
+            lost_note = f", {len(lost)}/{count} edge rays lost by the tree (float32, box rounding {box_rounding})"
+            if lost:
+                o, d, got, want = lost[0]
+                problems.append(f"{n}: {len(lost)} of {count} edge rays miss in the tree but hit a leaf "
+                                f"(first: origin {o}, direction {d}, leaf t {want['t']!r}, tree {got and got['t']!r})")
+        print(f"{n}: {len(data)} bytes, {len(errs)} validation errors, {bad}/{case_rays} rays differ ({hits} hits)"
+              f"{lost_note}")
         if bad:
             problems.append(f"{n}: {bad} of {case_rays} rays differ from brute force")
         if desc["kind"] == "blas" and len(desc["triangles"]) > 4 and hits == 0:
@@ -874,6 +923,9 @@ def main(argv=None):
     c = sub.add_parser("check-build", help="check the cases vk_xdxr_build_test wrote to a directory")
     c.add_argument("dir")
     c.add_argument("--rays", type=int, default=300)
+    c.add_argument("--edge-rays", type=int, default=200, help="BLAS rays through vertices and edges (0: none)")
+    c.add_argument("--box-rounding", choices=("nearest", "zero"), default="nearest",
+                   help="float32 slab rounding of the box test: the translator on main, or RDNA2's (#4957)")
     a = ap.parse_args(argv)
     if a.cmd == "check-build":
         if a.rays < 1:
@@ -881,7 +933,7 @@ def main(argv=None):
         if not _case_names(a.dir):
             print(f"no cases in {a.dir}: skipped (the build step skipped or did not run)")
             return 77                                   # ctest SKIP_RETURN_CODE
-        problems = check_build(a.dir, a.rays)
+        problems = check_build(a.dir, a.rays, edge_rays=a.edge_rays, box_rounding=a.box_rounding)
         for e in problems:
             print(e)
         print("all cases match" if not problems else f"{len(problems)} problems")

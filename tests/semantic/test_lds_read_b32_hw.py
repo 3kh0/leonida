@@ -281,5 +281,32 @@ class TestRegisterAliasing(unittest.TestCase):
                 continue
             self.assertEqual(state.vgprs[i], 0x2000 + i)
 
+class TestConditionCodes(unittest.TestCase):
+    def test_flags_unmodified_on_zero_read(self) -> None:
+        state = ScalarState()
+        state.scc = 1
+        state.vcc_lo = 0x55555555
+        state.vcc_hi = 0xAAAAAAAA
+        state.write_lds_u32(0x50, 0x00000000)
+        state.vgprs[1] = 0x50
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 2), RegSingle(RegType.VGPR, 1))
+        state.step(inst)
+        self.assertEqual(state.vgprs[2], 0)
+        self.assertEqual(state.scc, 1)
+        self.assertEqual(state.vcc_lo, 0x55555555)
+        self.assertEqual(state.vcc_hi, 0xAAAAAAAA)
+
+    def test_flags_unmodified_on_sign_bit_read(self) -> None:
+        state = ScalarState()
+        state.scc = 0
+        state.vcc_lo = 0xFFFFFFFF
+        state.write_lds_u32(0x60, 0x80000000)
+        state.vgprs[1] = 0x60
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 3), RegSingle(RegType.VGPR, 1))
+        state.step(inst)
+        self.assertEqual(state.vgprs[3], 0x80000000)
+        self.assertEqual(state.scc, 0)
+        self.assertEqual(state.vcc_lo, 0xFFFFFFFF)
+
 if __name__ == "__main__":
     unittest.main()

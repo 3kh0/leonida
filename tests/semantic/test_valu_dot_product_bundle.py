@@ -492,5 +492,21 @@ class VDot8I32I4TranslatorIntegrationTests(unittest.TestCase):
         res_u = ref_dot8_u32_u4(s0, s1, 0)
         self.assertNotEqual(res_i, res_u)
 
+class VDot8U32U4OracleTests(unittest.TestCase):
+    """Reference mathematical oracle tests for v_dot8_u32_u4."""
+
+    def test_unsigned_nibbles(self):
+        s0 = 0xF0000000  # highest nibble is 15
+        s1 = 0x10000000  # highest nibble is 1
+        res = ref_dot8_u32_u4(s0, s1, 0)
+        self.assertEqual(res, 15)
+
+    def test_all_nibbles_active(self):
+        s0 = 0x22222222
+        s1 = 0x33333333
+        res = ref_dot8_u32_u4(s0, s1, 10)
+        # 8 * 6 + 10 = 58
+        self.assertEqual(res, 58)
+
 if __name__ == "__main__":
     unittest.main()

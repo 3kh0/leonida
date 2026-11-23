@@ -178,6 +178,57 @@ class WaveSizeTest(unittest.TestCase):
         self.assertEqual(fssm_header.tally(rows, True)["wave_sizes"], {"wave32": 1, "wave64": 2})
 
 
+class UserSgprCountTest(unittest.TestCase):
+    def test_bits_20_16(self):
+        self.assertEqual(fssm_header.user_sgpr_count(blob(wave_flags=0x00110000)), 17)
+        self.assertEqual(fssm_header.user_sgpr_count(blob(wave_flags=0x000C0020)), 12)
+        self.assertEqual(fssm_header.user_sgpr_count(blob(wave_flags=0x000F0001)), 15)
+
+    def test_neighbouring_bits_do_not_leak(self):
+        # The wave32 bit, bit 0, and the VS bits 2 and 26 sit next to the field; bits 21-23 are
+        # outside it.  A lookalike word with only those set reads as 0.
+        self.assertEqual(fssm_header.user_sgpr_count(blob(wave_flags=0x04E00025)), 0)
+        self.assertEqual(fssm_header.user_sgpr_count(blob(wave_flags=0x040C0004)), 12)
+
+    def test_short_or_non_fssm_blob_returns_none(self):
+        self.assertIsNone(fssm_header.user_sgpr_count(b"FSSM"))
+        self.assertIsNone(fssm_header.user_sgpr_count(bytes(0x148)))
+
+    def test_compute_rsrc2_field(self):
+        data = bytearray(blob(wave_flags=0x000A0000))
+        struct.pack_into("<I", data, 0x138, (10 << 1) | (1 << 7))
+        self.assertEqual(fssm_header.compute_rsrc2_user_sgprs(bytes(data)), 10)
+        self.assertIsNone(fssm_header.compute_rsrc2_user_sgprs(bytes(0x13A)))
+
+    def test_tally_by_stage_and_the_compute_check(self):
+        rows = [
+            {"stage": "cs", "directory_ok": True, "wave_size": 64, "user_sgprs": 10, "rsrc2_user_sgprs": 10,
+             "entries": 0, "fp16_mask": 0, "inputs": []},
+            {"stage": "cs", "directory_ok": True, "wave_size": 64, "user_sgprs": 9, "rsrc2_user_sgprs": 10,
+             "entries": 0, "fp16_mask": 0, "inputs": []},
+            {"stage": "ps", "directory_ok": True, "wave_size": 64, "user_sgprs": 17,
+             "entries": 0, "fp16_mask": 0, "inputs": []},
+            {"stage": "ps", "directory_ok": True, "wave_size": None, "user_sgprs": None,
+             "entries": 0, "fp16_mask": 0, "inputs": []},
+        ]
+        total = fssm_header.tally(rows, True)
+        self.assertEqual(total["user_sgpr_counts"], {"cs": {9: 1, 10: 1}, "ps": {17: 1}})
+        self.assertEqual(total["cs_user_sgprs_match_rsrc2"], [1, 2])
+
+    def test_summarize_reads_rsrc2_for_compute_only(self):
+        data = bytearray(blob(wave_flags=0x000A0000))
+        struct.pack_into("<I", data, 0x138, 10 << 1)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "a.fssm")
+            with open(path, "wb") as f:
+                f.write(bytes(data))
+            cs = fssm_header.summarize(path, {"a": "cs"})
+            ps = fssm_header.summarize(path, {"a": "ps"})
+        self.assertEqual((cs["user_sgprs"], cs["rsrc2_user_sgprs"]), (10, 10))
+        self.assertEqual(ps["user_sgprs"], 10)
+        self.assertNotIn("rsrc2_user_sgprs", ps)
+
+
 class BindingTableTest(unittest.TestCase):
     def test_records_header_and_name(self):
         table = fssm_header.binding_table(

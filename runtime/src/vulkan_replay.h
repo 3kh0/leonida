@@ -2689,8 +2689,8 @@ ReplayResult prepare(const CommandList& list, Resolve&& resolve, const ReplayFun
             // rects past mip 0 is copied from a scratch range filled with the stencil value, one copy per rect, which is
             // exact on every driver. Without scratch it stays on the attachment path.
             p.stencil_copies.clear();
-            if (!p.skip && !p.rects.empty() && (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) && depth_clear->target.mip > 0 &&
-                vk.copy_buffer_to_image && vk.fill_buffer && vk.copy_scratch) {
+            if (!predicated && !p.skip && !p.rects.empty() && (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) &&
+                depth_clear->target.mip > 0 && vk.copy_buffer_to_image && vk.fill_buffer && vk.copy_scratch) {
                 VkDeviceSize most = 0;
                 for (const VkClearRect& r : p.rects)
                     most = std::max<VkDeviceSize>(most, VkDeviceSize(r.rect.extent.width) * r.rect.extent.height *

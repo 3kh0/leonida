@@ -249,7 +249,8 @@ private:
     void reserve_changes_locked(std::size_t extra) {
         if (all_changed_ || extra == 0) return;
         if (extra > changed_slots_.max_size() - changed_slots_.size()) throw std::bad_alloc();
-        changed_slots_.reserve(changed_slots_.size() + extra);
+        const std::size_t need = changed_slots_.size() + extra;
+        if (need > changed_slots_.capacity()) changed_slots_.reserve(std::max(need, changed_slots_.capacity() * 2));
     }
 
     void mark(std::uint32_t slot) {

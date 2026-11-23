@@ -984,6 +984,7 @@ def scan_dir(path, max_inflate=MAX_INFLATE):
     """Scan a directory of carved `.bin` files in bounded memory."""
     t0 = time.time()
     by_off = _carve_stored_map(path)
+    hint_owner = {}
     candidates = []
     skipped = 0
     for idx, name in enumerate(sorted(os.listdir(path))):
@@ -997,6 +998,10 @@ def scan_dir(path, max_inflate=MAX_INFLATE):
         m = re.match(r"([0-9a-fA-F]{6,})", name)
         offset = int(m.group(1), 16) if m else idx
         candidates.append((not bool(m), offset, full, fsize))
+        if m and offset in by_off:
+            # Prefer the carver's spelling even if a copy sorted before it.
+            if offset not in hint_owner or name == f"{offset:012x}.bin":
+                hint_owner[offset] = full
 
     candidates.sort(key=lambda item: (item[0], item[1]))
     consumer = _StreamConsumer(max_inflate=max_inflate)
@@ -1005,7 +1010,7 @@ def scan_dir(path, max_inflate=MAX_INFLATE):
     for _no_hex, offset, full, _fsize in candidates:
         with open(full, "rb") as fh:
             data = fh.read()
-        stored = by_off.get(offset)
+        stored = by_off[offset] if hint_owner.get(offset) == full else None
         inflated += len(data)
         stored_sum += stored if stored is not None else len(data)
         consumer.feed(offset, stored, data)

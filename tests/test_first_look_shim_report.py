@@ -26,6 +26,8 @@ class FirstLookShimReportTest(unittest.TestCase):
                          "tools/exe_checklist.py"):
                 (root / name).parent.mkdir(exist_ok=True)
                 shutil.copyfile(source / name, root / name)
+            for folder in ("runtime/src", "runtime/shims"):
+                (root / folder).mkdir(parents=True)
             loader = root / "runtime/build/gta6rt.exe"
             loader.parent.mkdir(parents=True)
             loader.touch()

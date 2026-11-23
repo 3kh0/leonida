@@ -265,6 +265,26 @@ class TestVFmaF16ReferenceOracle(unittest.TestCase):
         res = oracle_v_fma_f16(0x4000, 0x3e00, 0x3c00)
         self.assertEqual(res, 0x4400)
 
+class TestVFmaF16ASTAndInterpreter(unittest.TestCase):
+    """Stage 2 for v_fma_f16: AST and deterministic scalar interpreter execution."""
+
+    def test_v_fma_f16_ast_and_execution(self):
+        lines = [
+            "v_mov_b32 v1, 0x4000",
+            "v_mov_b32 v2, 0x3e00",
+            "v_mov_b32 v3, 0x3c00",
+            "v_fma_f16 v0, v1, v2, v3",
+            "v_mov_b32 v1, 0",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+            "exp mrt0 v0, v1, v2, v3 done vm",
+            "s_endpgm",
+        ]
+        spv = support.translate_lines("ps_ast_v_fma_f16", lines)
+        self.assertIn("UnpackHalf2x16", spv)
+        words = support.mrt0_words(spv)
+        self.assertEqual(words[0] & 0xFFFF, 0x4400)
+
 
 if __name__ == '__main__':
     unittest.main()

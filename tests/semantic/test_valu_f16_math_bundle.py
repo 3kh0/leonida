@@ -292,5 +292,11 @@ class VFrexpMantF16OracleTests(unittest.TestCase):
         # 3.0: 3.0 = 0.75 * 2^2 -> mantissa is 0.75 (0x3a00)
         self.assertEqual(oracle_frexp_mant_f16(f16_to_u16(3.0)), 0x3A00)
 
+class VFrexpMantF16AstTests(unittest.TestCase):
+    def test_frexp_mant_ast_construction(self):
+        ast = F16InstructionAST("v_frexp_mant_f16", Operand(RegKind.VGPR, 2), Operand(RegKind.VGPR, 0))
+        self.assertEqual(ast.mnemonic, "v_frexp_mant_f16")
+        self.assertEqual(ast.dst.index, 2)
+
 if __name__ == "__main__":
     unittest.main()

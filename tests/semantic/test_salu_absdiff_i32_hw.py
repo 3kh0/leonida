@@ -126,5 +126,52 @@ class TestAbsdiffReferenceOracle(unittest.TestCase):
                 self.assertEqual(words[1], expected_scc)
 
 
+class Sop2Opcode:
+    """Symbolic AST opcode descriptor for SOP2 instructions."""
+
+    def __init__(self, mnemonic: str, dst: str, src0: str, src1: str) -> None:
+        self.mnemonic = mnemonic
+        self.dst = dst
+        self.src0 = src0
+        self.src1 = src1
+
+    def emit_assembly(self) -> str:
+        return f"{self.mnemonic} {self.dst}, {self.src0}, {self.src1}"
+
+
+class TestAbsdiffASTAndTypes(unittest.TestCase):
+    """Commit 2: symbolic AST opcode definitions and typed expressions for s_absdiff_i32."""
+
+    def test_ast_emission_and_translation(self):
+        op = Sop2Opcode("s_absdiff_i32", "s2", "s0", "s1")
+        self.assertEqual(op.emit_assembly(), "s_absdiff_i32 s2, s0, s1")
+        lines = [
+            "s_mov_b32 s0, 80",
+            "s_mov_b32 s1, 30",
+            op.emit_assembly(),
+            "v_mov_b32 v0, s2",
+            "v_mov_b32 v1, 0",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+        ]
+        spv = support.translate_lines("ps_absdiff_ast", lines + ["exp mrt0 v0, v1, v2, v3 done vm", "s_endpgm"])
+        self.assertIn("SAbs", spv)
+        words = support.mrt0_words(spv)
+        self.assertEqual(words[0], 50)
+
+    def test_ast_constant_folding_path(self):
+        # When both operands are immediate literals, rdna2spirv folds the constant at compile time
+        op = Sop2Opcode("s_absdiff_i32", "s0", "100", "40")
+        lines = [
+            op.emit_assembly(),
+            "v_mov_b32 v0, s0",
+            "v_mov_b32 v1, 0",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+        ]
+        words = run_absdiff_ps(lines, "ps_absdiff_ast_fold")
+        self.assertEqual(words[0], 60)
+
+
 if __name__ == '__main__':
     unittest.main()

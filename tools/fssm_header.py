@@ -47,6 +47,12 @@ and is at least 0xD8 bytes long: 2,662 are wave32 (1,535 CS, 1,127 PS) and 23,84
 (1,154 CS, 195 GS, 9,282 MS, 10,974 PS, 2,236 VS), with zero contradictions against GFX10
 code-proven wave32/wave64 instructions across all five stages.
 
+Bits 20:16 of the same word are the user-SGPR count (`user_sgpr_count()`).  In all 2,689
+compute blobs they equal the USER_SGPR field of COMPUTE_PGM_RSRC2 (u32 at 0x138, bits 5:1).
+The graphics stages carry it too: VS 8-20, PS 8-20, MS 13-17, GS 13-17 (docs/d3d12_vulkan.md
+section 3.4).  The word's other set bits: bit 0 in all 195 GS, bits 2 and 26 in 788 VS, none
+elsewhere.
+
 The post-`code_end` tail carries a binding table.  After 16 bytes of `0xBF9F0000` filler and an
 8-byte header, 20-byte records run until a `0xFFFFFFFF` sentinel; then `u32 0`, `u16 0`, `u16`
 name length and the name.  `binding_table()` returns those records.  On the local 26,503-blob
@@ -82,6 +88,9 @@ CODE_OFFSET = 0xC0
 CODE_SIZE = 0xC8
 WAVE_FLAGS_OFFSET = 0xD4
 FLAG_WAVE32 = 0x20
+USER_SGPR_SHIFT = 16      # u32[0xD4] bits 20:16: the user-SGPR count
+USER_SGPR_MASK = 0x1F
+COMPUTE_RSRC2 = 0x138     # compute only: COMPUTE_PGM_RSRC2, USER_SGPR in bits 5:1
 CODE_END = 0xE8
 CODE_END_UNSET = 0xDEADBEEFDEADBEEF
 TAIL_FILLER = 0xBF9F0000
@@ -162,6 +171,25 @@ def wave_size(blob):
     if len(blob) < WAVE_FLAGS_OFFSET + 4 or blob[:4] != MAGIC:
         return None
     return 32 if (_u32(blob, WAVE_FLAGS_OFFSET) & FLAG_WAVE32) else 64
+
+
+def user_sgpr_count(blob):
+    """Return the user-SGPR count from u32[0xD4] bits 20:16, or None.
+
+    In every compute blob of the corpus it equals the USER_SGPR field (bits 5:1) of the
+    COMPUTE_PGM_RSRC2 word at 0x138; the graphics stages carry it in the same bits.  None under
+    the same conditions as wave_size().
+    """
+    if len(blob) < WAVE_FLAGS_OFFSET + 4 or blob[:4] != MAGIC:
+        return None
+    return (_u32(blob, WAVE_FLAGS_OFFSET) >> USER_SGPR_SHIFT) & USER_SGPR_MASK
+
+
+def compute_rsrc2_user_sgprs(blob):
+    """USER_SGPR (bits 5:1) of the compute RSRC2 word at 0x138; meaningful for compute blobs only."""
+    if len(blob) < COMPUTE_RSRC2 + 4:
+        return None
+    return (_u32(blob, COMPUTE_RSRC2) >> 1) & 0x1F
 
 
 def binding_table(blob):
@@ -280,10 +308,13 @@ def summarize(path, stages, bindings=False):
         "stage": stages.get(stem),
         "directory_ok": directory_ok(blob),
         "wave_size": wave_size(blob),
+        "user_sgprs": user_sgpr_count(blob),
         "entries": count,
         "fp16_mask": fp16,
         "inputs": pixel_inputs(blob),
     }
+    if row["stage"] == "cs":
+        row["rsrc2_user_sgprs"] = compute_rsrc2_user_sgprs(blob)
     if bindings:
         table = binding_table(blob)
         row["bindings"] = None if table is None else {
@@ -309,6 +340,12 @@ def tally(rows, stages_known):
         scope = "all"
     methods = Counter(read_name(entry["flags"] & READ_MASK) for row in ps for entry in row["inputs"])
     waves = Counter(f"wave{ws}" for row in rows if (ws := row.get("wave_size")) is not None)
+    users = {}
+    for row in rows:
+        if row.get("user_sgprs") is not None:
+            hist = users.setdefault(row.get("stage") or "?", Counter())
+            hist[row["user_sgprs"]] += 1
+    cs = [row for row in rows if row.get("stage") == "cs" and row.get("user_sgprs") is not None]
     return {
         "files": len(rows),
         "directory_ok": sum(row["directory_ok"] for row in rows),
@@ -318,6 +355,9 @@ def tally(rows, stages_known):
         "entry_counts_scope": scope,
         "read_methods": dict(sorted(methods.items())),
         "wave_sizes": dict(sorted(waves.items())),
+        "user_sgpr_counts": {stage: dict(sorted(hist.items())) for stage, hist in sorted(users.items())},
+        "cs_user_sgprs_match_rsrc2": [sum(1 for row in cs if row["user_sgprs"] == row.get("rsrc2_user_sgprs")),
+                                      len(cs)],
         "stage_source": "index.json" if stages_known else "table-only",
     }
 
@@ -368,8 +408,9 @@ def main(argv=None):
     for row in rows:
         stage = row["stage"] or "?"
         wave = row["wave_size"] if row["wave_size"] is not None else "?"
+        users = row["user_sgprs"] if row["user_sgprs"] is not None else "?"
         print(f"{row['name']}: stage={stage} directory_ok={row['directory_ok']} "
-              f"entries={row['entries']} fp16=0x{row['fp16_mask']:x} wave={wave}")
+              f"entries={row['entries']} fp16=0x{row['fp16_mask']:x} wave={wave} user_sgprs={users}")
         if args.bindings:
             table = row["bindings"]
             if table is None:
@@ -382,6 +423,11 @@ def main(argv=None):
           f"PS with table {total['ps_with_table']}, entries {total['entries']}")
     if total["wave_sizes"]:
         print("wave sizes: " + ", ".join(f"{k}:{v}" for k, v in total["wave_sizes"].items()))
+    for stage, hist in total["user_sgpr_counts"].items():
+        print(f"user SGPRs {stage}: " + ", ".join(f"{k}:{v}" for k, v in hist.items()))
+    match, cs_total = total["cs_user_sgprs_match_rsrc2"]
+    if cs_total:
+        print(f"CS user SGPRs equal COMPUTE_PGM_RSRC2 USER_SGPR in {match}/{cs_total}")
     if total["read_methods"]:
         print("read methods: " + ", ".join(f"{k}:{v}" for k, v in total["read_methods"].items()))
     label = "PS entry counts" if total["entry_counts_scope"] == "ps" else "entry counts"

@@ -1346,9 +1346,19 @@ The game can use D3D12 descriptors in three ways, and the layer must handle all 
    heap-indexing shaders add a base read with a run-time offset (the heap index): for example `s10` in CS, `s23` in
    MS and `s15` in PS for the resource heap, and a separate base for the sampler heap (`s11` in CS, `s24` in MS,
    `s16` in PS). For compute this is settled: every base lies below the shader's `COMPUTE_PGM_RSRC2` `USER_SGPR`
-   count, so it is user data. For VS, PS, MS and GS no user-SGPR count is measured; every base lies below `s32` and
-   none is the NGG `s3`, so they are user data under the translator's 32-SGPR assumption, and the user count of the
-   graphics stages (question 3 in the table below) is what would confirm it. Which SGPR holds which heap varies
+   count, so it is user data. **The graphics stages' user count is measured too:** the FSSM header word `u32[0xD4]`
+   (whose bit 5 is the wave size) holds the user-SGPR count in bits 20:16 (`fssm_header.user_sgpr_count()`). In
+   all 2,689 compute blobs it equals `COMPUTE_PGM_RSRC2` `USER_SGPR` (`u32[0x138]` bits 5:1). Over all 26,503
+   blobs it is 8–20 in VS and PS, 13–17 in MS and GS, and 4–14 in CS; it never exceeds 20. Against the SGPRs each
+   shader reads before writing (`user_sgpr_reads`, all 26,503): no pointer read (`ptr32_lo`, `ptr64_lo/hi`,
+   `vsharp`, `tsharp`) lies at or past the count in CS, VS or PS, or past count + 8 in MS and GS, so every heap
+   base above is user data. Reads past those bounds are all `const32`: in 4 VS, 129 PS (besides `s[count]`) and
+   10 MS. A PS reads `s[count]` itself as `const32` in 10,277 of 12,101, 10,267 of them with an FSSM interpolant
+   table, consistent with the hardware's `PRIM_MASK` following the user SGPRs; MS and GS read up to count + 7,
+   consistent with user data from `s8` in the merged stages. Both readings are hypotheses from the counts, and a
+   read-before-write scan says nothing about values a loop carries. Reproduce with
+   `python -I tools/fssm_header.py <work>/shaders/dxbc/fssm` (`user SGPRs <stage>` lines and the CS check).
+   Which SGPR holds which heap varies
    with the stage and the root signature, so placing the bases belongs to the root-signature mapping, not to a new
    translator input. No stride is read at run time: static offsets of T# loads are multiples of 32 and of S# loads
    multiples of 16, so the stride is compiled into the code.
@@ -1591,7 +1601,8 @@ Things that can invalidate this simple model, all **Open**:
   to be reverse-engineered from the shader's loads.
 - **Direct heap indexing.** The bound heap base and stride are not root parameters. Measured (D3D-329, section
   3.4): each heap's base reaches the shader as a 32-bit pointer in an entry SGPR, inside the user data for compute
-  (and below `s32` for the graphics stages, whose user count is not measured yet), and the stride is compiled into
+  and, for the graphics stages, below the user-SGPR count in FSSM `u32[0xD4]` bits 20:16 (section 3.4; count + 8
+  for MS and GS), and the stride is compiled into
   the shader's offsets. So the translator needs no new runtime value; the layer has to write the bound heap bases
   into the user-data slots the root-signature mapping assigns them. The root signature
   flag tells us direct indexing is enabled; the shader's address arithmetic identifies the base.

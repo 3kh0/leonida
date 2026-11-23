@@ -436,6 +436,11 @@ open for wave64; a mask read as VALU data, #293) are left out unless `--known`. 
 one wave on an AMD GPU and compares every lane; on an RDNA2 iGPU (gfx1036) 1,000 programs in both wave sizes,
 the known forms included, matched the reference.
 
+The e64 carry ops also get `clamp`, on about a third of them: D saturates to `0xffffffff` on an add's carry out
+and to 0 on a sub's borrow, while the mask still gets the real carry or borrow (`docs/design.md`, "Integer clamp",
+measured on gfx1035 and gfx1036). The tool's own gfx1036 run above is older than these forms: `--oracle hw`
+generates them, but they have not been through it yet.
+
 ```
 python -I tools/wint_diff.py --programs 2000 --seed 1 --wave both
 python -I tools/wint_diff.py --oracle hw --programs 500 --seed 1 --wave both

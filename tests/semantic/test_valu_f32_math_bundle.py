@@ -323,5 +323,29 @@ class TestFrexpExpI32F32Oracle(unittest.TestCase):
         self.assertEqual(ref_frexp_exp_i32_f32(0x0000_0001), 0)
 
 
+# ------------------------------------------------------------------------------
+# v_frexp_exp_i32_f32 AST Definitions
+# ------------------------------------------------------------------------------
+
+@dataclass
+class VFrexpExpI32F32Instruction:
+    dst: RegisterOperand
+    src0: Union[RegisterOperand, LiteralOperand]
+
+    def __post_init__(self):
+        if self.dst.op_type != OperandType.VGPR:
+            raise TypeError("Destination of v_frexp_exp_i32_f32 must be a VGPR")
+
+
+class TestFrexpExpI32F32AST(unittest.TestCase):
+    def test_ast_construction(self):
+        insn = VFrexpExpI32F32Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 1),
+        )
+        self.assertEqual(insn.dst.name, "v0")
+        self.assertEqual(insn.src0.name, "v1")
+
+
 if __name__ == '__main__':
     unittest.main()

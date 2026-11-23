@@ -325,5 +325,17 @@ class VFrexpMantF16EdgeCasesTests(unittest.TestCase):
         self.assertEqual(oracle_frexp_mant_f16(F16_POS_INF), F16_POS_INF)
         self.assertEqual(oracle_frexp_mant_f16(F16_QNAN), F16_QNAN)
 
+class VFrexpMantF16TranslatorTests(unittest.TestCase):
+    def test_frexp_mant_translation_and_execution(self):
+        lines = [
+            "v_mov_b32 v0, 0x3c00",  # 1.0 in f16
+            "v_frexp_mant_f16 v1, v0",
+            "exp mrt0 v1, v1, v1, v1 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_frexp_mant_f16_exec", lines)
+        val = mrt0_words(spv)[0] & MASK16
+        self.assertEqual(val, 0x3800)  # 0.5 in f16
+
 if __name__ == "__main__":
     unittest.main()

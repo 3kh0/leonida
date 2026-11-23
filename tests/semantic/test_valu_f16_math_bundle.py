@@ -366,5 +366,11 @@ class VLdexpF16OracleTests(unittest.TestCase):
         # 1.0 * 2^-2 = 0.25 (0x3400)
         self.assertEqual(oracle_ldexp_f16(F16_POS_ONE, -2 & MASK16), 0x3400)
 
+class VLdexpF16AstTests(unittest.TestCase):
+    def test_ldexp_ast_construction(self):
+        ast = F16InstructionAST("v_ldexp_f16", Operand(RegKind.VGPR, 2), Operand(RegKind.VGPR, 0), Operand(RegKind.VGPR, 1))
+        self.assertEqual(ast.mnemonic, "v_ldexp_f16")
+        self.assertEqual(ast.dst.index, 2)
+
 if __name__ == "__main__":
     unittest.main()

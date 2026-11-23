@@ -56,6 +56,14 @@ def new_totals():
             "shaders": {}, "no_shader": 0}
 
 
+def hashable(value):
+    """A value usable in the unique-model key: scalars as they are, anything else (a malformed list or object) as
+    its canonical JSON, so it is counted instead of crashing the set lookup."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    return ("json", json.dumps(value, sort_keys=True))
+
+
 def count(paths, chunk=CHUNK):
     """Totals per archive and overall. Returns (per_archive, overall, problems)."""
     per, problems = {}, []
@@ -76,13 +84,20 @@ def count(paths, chunk=CHUNK):
             except StopIteration as stop:
                 declared = stop.value
                 break
+            if not isinstance(item, dict):
+                raise ValueError(f"{label}: model entry {t['models'] + 1} is not an object")
             t["models"] += 1
             sig = []
-            for m in item.get("Materials") or []:
+            mats = item.get("Materials") or []
+            if not isinstance(mats, list):
+                raise ValueError(f"{label}: Materials of model entry {t['models']} is not an array")
+            for m in mats:
+                if not isinstance(m, dict):
+                    raise ValueError(f"{label}: a material of model entry {t['models']} is not an object")
                 b = m.get("RenderBucket")
                 if not isinstance(b, int) or isinstance(b, bool):
                     t["bad"] += 1
-                    sig.append((m.get("Shader"), None))
+                    sig.append((hashable(m.get("Shader")), None))
                     continue
                 t["materials"] += 1
                 low = b & 0x7F
@@ -97,8 +112,8 @@ def count(paths, chunk=CHUNK):
                     t["shaders"].setdefault(low, set()).add(shader.strip().lower())
                 else:
                     t["no_shader"] += 1
-                sig.append((m.get("Shader"), b))
-            key = (item.get("Name"), item.get("Verts"), item.get("Tris"), tuple(sig))
+                sig.append((hashable(shader), b))
+            key = (hashable(item.get("Name")), hashable(item.get("Verts")), hashable(item.get("Tris")), tuple(sig))
             if key not in seen:
                 seen.add(key)
                 for agg in (t, overall):

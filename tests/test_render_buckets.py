@@ -311,6 +311,28 @@ class CliTests(unittest.TestCase):
             self.assertIn("invalid manifest JSON", err)
             self.assertNotIn("Traceback", err)
 
+    def test_non_scalar_fields_are_counted_not_crashed(self):
+        # Flyander on #4946: a list as Shader (and as Name) crashed the unique-model set with TypeError
+        items = [{"Name": "x", "Verts": 1, "Tris": 1, "Materials": [{"Shader": ["bad"], "RenderBucket": 0}]},
+                 {"Name": ["n"], "Verts": 1, "Tris": 1, "Materials": [{"Shader": {"a": 1}, "RenderBucket": "z"}]},
+                 {"Name": "x", "Verts": 1, "Tris": 1, "Materials": [{"Shader": ["bad"], "RenderBucket": 0}]}]
+        with tempfile.TemporaryDirectory() as tmp:
+            write_manifest(os.path.join(tmp, "arc", "models"), items, count=3)
+            code, out, err = self.run_cli([tmp])
+            self.assertEqual(code, 0, err)
+            self.assertNotIn("Traceback", err)
+            self.assertIn("unique models 2", out)        # the repeated malformed model is still one model
+            self.assertIn("unreadable bucket: 1", out)
+            self.assertIn("materials without a shader hash: 2", out)
+
+    def test_non_object_entries_exit_2(self):
+        for items in ([1], [{"Materials": [7]}], [{"Materials": {"Shader": "s"}}]):
+            with tempfile.TemporaryDirectory() as tmp:
+                write_manifest(os.path.join(tmp, "arc", "models"), items)
+                code, _, err = self.run_cli([tmp])
+                self.assertEqual(code, 2, (items, err))
+                self.assertNotIn("Traceback", err)
+
     def test_mismatch_sets_exit_code(self):
         with tempfile.TemporaryDirectory() as tmp:
             write_manifest(os.path.join(tmp, "arc", "models"), [model("a", [0])], count=5)

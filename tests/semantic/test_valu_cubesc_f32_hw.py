@@ -454,5 +454,50 @@ class TestVCubescF32RegisterAliasing(unittest.TestCase):
         self.assertEqual(support.mrt0_words(spv)[0], f32_to_bits(-0.75))
 
 
+@dataclasses.dataclass(frozen=True)
+class CubeScStatusFlags:
+    is_zero: bool
+    is_negative: bool
+    major_axis: str
+
+
+def compute_status_flags(x: float, y: float, z: float) -> CubeScStatusFlags:
+    sc = ref_cubesc(x, y, z)
+    ax, ay, az = abs(x), abs(y), abs(z)
+    if az >= ax and az >= ay:
+        major = "Z"
+    elif ay >= ax:
+        major = "Y"
+    else:
+        major = "X"
+    bits = f32_to_bits(sc)
+    return CubeScStatusFlags(
+        is_zero=(sc == 0.0),
+        is_negative=((bits & 0x80000000) != 0),
+        major_axis=major,
+    )
+
+
+class TestVCubescF32ConditionCodes(unittest.TestCase):
+    """Condition codes, status flags, and classification."""
+
+    def test_zero_result_flags(self):
+        flags = compute_status_flags(0.0, 1.0, 0.5)
+        self.assertTrue(flags.is_zero)
+        self.assertEqual(flags.major_axis, "Y")
+
+    def test_negative_result_flags(self):
+        flags = compute_status_flags(4.0, -1.5, 0.75)
+        self.assertFalse(flags.is_zero)
+        self.assertTrue(flags.is_negative)
+        self.assertEqual(flags.major_axis, "X")
+
+    def test_positive_result_flags(self):
+        flags = compute_status_flags(-0.5, 1.25, -2.5)
+        self.assertFalse(flags.is_zero)
+        self.assertFalse(flags.is_negative)
+        self.assertEqual(flags.major_axis, "Z")
+
+
 if __name__ == "__main__":
     unittest.main()

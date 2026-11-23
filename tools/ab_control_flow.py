@@ -45,6 +45,14 @@ def is_backward_branch(disassembly):
     return any(int(target) >= 0x8000 for target in BACK.findall(disassembly))
 
 
+def valid_metadata(metadata):
+    """Whether one index entry is an object whose bindings and features, when present, are lists of scalars."""
+    return isinstance(metadata, dict) and all(
+        isinstance(metadata.get(key, []), list)
+        and all(isinstance(v, (int, str)) for v in metadata.get(key, []))
+        for key in ("bindings", "features"))
+
+
 def supported_pixel_shaders(index):
     """Return sorted pixel-shader names whose bindings and features are available in the harness."""
     return sorted(name for name, metadata in index.items()
@@ -218,8 +226,9 @@ def main(argv=None):
         ap.error(f"cannot read {index_path}: {getattr(e, 'strerror', None) or e}")
     if a.names and not os.path.isfile(a.names):
         ap.error(f"--names {a.names} is not a file")
-    if not isinstance(index, dict) or any(not isinstance(item, dict) for item in index.values()):
-        ap.error(f"{index_path}: expected a JSON object mapping shader names to metadata")
+    if not isinstance(index, dict) or any(not valid_metadata(item) for item in index.values()):
+        ap.error(f"{index_path}: expected a JSON object mapping shader names to metadata "
+                 "(an object whose bindings and features, when present, are lists of numbers or strings)")
     names = supported_pixel_shaders(index)
     print(f"{len(names)} pixel shaders use only the bindings and features the harness provides")
     try:
@@ -236,8 +245,8 @@ def main(argv=None):
         return 1
     new = os.path.join(a.out, "new")
     out_existed = os.path.isdir(a.out)
-    before = set(os.listdir(a.out)) if out_existed else set()
     try:
+        before = set(os.listdir(a.out)) if out_existed else set()
         os.makedirs(new, exist_ok=True)
     except OSError as e:
         ap.error(f"cannot create {new}: {e.strerror or e}")

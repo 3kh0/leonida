@@ -279,6 +279,35 @@ class TestCli(unittest.TestCase):
             self.assertEqual((got["PSIN files"], got["containers"], got["containers fully reached"]), (1, 1, 1))
             self.assertEqual(got["bytes reached"], got["bytes"])
 
+    def test_a_file_that_is_not_psin_is_one_error_line(self):
+        # An .rpf archive, a zlib stream or an empty file: nothing to count, and the reader is told what to pass.
+        for blob in (b"RPF9" + bytes(16), b"\x78\xda not psin", b""):
+            with self.subTest(blob=blob[:4]), tempfile.TemporaryDirectory() as tmp:
+                path = os.path.join(tmp, "archive.rpf")
+                with open(path, "wb") as f:
+                    f.write(blob)
+                for args in ((path,), (path, "--json")):
+                    r = self.run_tool(*args)
+                    self.assertEqual(r.returncode, 2, r.stdout)
+                    self.assertEqual(r.stdout, "")
+                    self.assertNotIn("Traceback", r.stderr)
+                    self.assertEqual(len(r.stderr.strip().splitlines()), 1, r.stderr)
+                    self.assertIn("not a PSIN file", r.stderr)
+
+    def test_a_folder_without_psin_says_zero(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for files in ((), ("000000002000.bin",)):
+                for name in files:
+                    with open(os.path.join(tmp, name), "wb") as f:
+                        f.write(b"\x78\xda not psin")
+                with self.subTest(files=files):
+                    r = self.run_tool(tmp, "--json")
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertEqual(json.loads(r.stdout), {"PSIN files": 0})
+                    r = self.run_tool(tmp)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertEqual(r.stdout.split(), ["PSIN", "files", "0"])
+
     def test_dump_prints_the_tree(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "one.bin")

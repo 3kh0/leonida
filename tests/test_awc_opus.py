@@ -1023,6 +1023,54 @@ class MusicChannelFormatTest(unittest.TestCase):
 
 
 class MalformedBankTest(unittest.TestCase):
+    def test_packet_crossing_block_does_not_publish_partial_opus(self):
+        opus = bytearray(2048)
+        struct.pack_into("<H3sH", opus, 0, 3, bytes.fromhex("f8fffe"), 2042)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bank = root / "synthetic.awc"
+            bank.write_bytes(build_bank([
+                (1, format_block(1920, 48000, 0x0B, 1), opus),
+                (2, format_block(1, 48000, 0, 1), b"\x01\x00"),
+            ]))
+            counts = awc.export_bank(str(bank), str(root / "out"))
+            self.assertEqual((counts["opus"], counts["pcm"]), (0, 1))
+            output = root / "out" / "synthetic" / "00000001.ogg"
+            self.assertFalse(output.exists())
+            self.assertTrue((root / "out" / "synthetic" / "00000002.wav").is_file())
+
+            # Simulate the partial Ogg published by the previous exporter.
+            awc.write_ogg_opus(str(output), [bytes.fromhex("f8fffe")], 1, 1)
+            previous = output.read_bytes()
+            with contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                counts = awc.export_bank(str(bank), str(root / "out"))
+            self.assertEqual((counts["opus"], counts["pcm"]), (0, 1))
+            self.assertEqual(output.read_bytes(), previous)
+            self.assertIn(f"keeping existing Ogg {output}", diagnostic.getvalue())
+
+    def test_streamed_packet_crossing_block_keeps_pcm_sibling(self):
+        bank = bytearray(build_music_pcm_bank())
+        _, music = awc.parse_awc(bank)
+        _, (offset, _) = music[0]
+        struct.pack_into("<H3sH", bank, offset + 2048, 3, bytes.fromhex("f8fffe"), 2042)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "synthetic.awc"
+            source.write_bytes(bank)
+            counts = awc.export_bank(str(source), str(root / "out"))
+            self.assertEqual((counts["music"], counts["pcm"]), (0, 1))
+            output = root / "out" / "synthetic" / "00000100.ogg"
+            self.assertFalse(output.exists())
+            self.assertTrue((root / "out" / "synthetic" / "00000021.wav").is_file())
+
+            awc.write_ogg_opus(str(output), [bytes.fromhex("f8fffe")], 1, 0x100)
+            previous = output.read_bytes()
+            with contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                counts = awc.export_bank(str(source), str(root / "out"))
+            self.assertEqual((counts["music"], counts["pcm"]), (0, 1))
+            self.assertEqual(output.read_bytes(), previous)
+            self.assertIn("Existing Ogg files for this descriptor may be stale.", diagnostic.getvalue())
+
     def test_truncated_pcm_bank_creates_no_outputs(self):
         pcm = b"\x01\x00" * 4
         fmt = format_block(4, 48000, 0, 1)

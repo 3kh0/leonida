@@ -347,5 +347,39 @@ class TestFrexpExpI32F32AST(unittest.TestCase):
         self.assertEqual(insn.src0.name, "v1")
 
 
+# ------------------------------------------------------------------------------
+# v_frexp_exp_i32_f32 Scalar Interpreter
+# ------------------------------------------------------------------------------
+
+class ScalarMachineFrexpExp:
+    def __init__(self):
+        self.vgprs: List[int] = [0] * 256
+        self.sgprs: List[int] = [0] * 106
+
+    def read_operand(self, op: Union[RegisterOperand, LiteralOperand]) -> int:
+        if isinstance(op, LiteralOperand):
+            return op.value & MASK32
+        elif op.op_type == OperandType.VGPR:
+            return self.vgprs[op.index] & MASK32
+        elif op.op_type == OperandType.SGPR:
+            return self.sgprs[op.index] & MASK32
+        raise TypeError(f"Unknown operand: {op}")
+
+    def step(self, insn: VFrexpExpI32F32Instruction):
+        val = self.read_operand(insn.src0)
+        self.vgprs[insn.dst.index] = ref_frexp_exp_i32_f32(val)
+
+
+class TestFrexpExpI32F32ScalarInterpreter(unittest.TestCase):
+    def setUp(self):
+        self.machine = ScalarMachineFrexpExp()
+
+    def test_scalar_execution(self):
+        self.machine.vgprs[1] = f32_to_bits(4.0)
+        insn = VFrexpExpI32F32Instruction(dst=RegisterOperand(OperandType.VGPR, 0), src0=RegisterOperand(OperandType.VGPR, 1))
+        self.machine.step(insn)
+        self.assertEqual(self.machine.vgprs[0], 3)
+
+
 if __name__ == '__main__':
     unittest.main()

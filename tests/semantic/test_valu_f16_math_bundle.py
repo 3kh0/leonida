@@ -372,5 +372,11 @@ class VLdexpF16AstTests(unittest.TestCase):
         self.assertEqual(ast.mnemonic, "v_ldexp_f16")
         self.assertEqual(ast.dst.index, 2)
 
+class VLdexpF16ScalarInterpreterTests(unittest.TestCase):
+    def test_ldexp_scalar_execution(self):
+        # 1.5 * 2^1 = 3.0
+        res = oracle_ldexp_f16(f16_to_u16(1.5), 1)
+        self.assertEqual(res, f16_to_u16(3.0))
+
 if __name__ == "__main__":
     unittest.main()

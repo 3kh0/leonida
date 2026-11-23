@@ -129,10 +129,16 @@ def load_dialogue(path):
     """{wave: row} and language codes; refuse repeated waves whose rendered tags disagree."""
     with open(path, encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
-        langs = [f[5:] for f in reader.fieldnames or [] if f.startswith("text_")]
+        fields = reader.fieldnames or ()
+        if "wave" not in fields:
+            raise ValueError(f"{path}: missing 'wave' column in dialogue CSV header")
+        langs = [f[5:] for f in fields if f.startswith("text_")]
         out = {}
         for row in reader:
-            wave = row["wave"].lower()
+            wave = row["wave"]
+            if not wave or wave.isspace():
+                raise ValueError(f"{path}: line {reader.line_num}: missing dialogue wave")
+            wave = wave.lower()
             if wave in out:
                 previous = tags_packet(comments(wave, out[wave], langs))
                 if previous != tags_packet(comments(wave, row, langs)):

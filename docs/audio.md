@@ -353,6 +353,10 @@ out. A file is matched by its stream id and its bank: the folder below the Opus 
 folders removed, so one Opus folder can hold several archives' exports. `--source` limits the names to one source
 label of the names CSV.
 
+The dialogue CSV needs a `wave` column. If the column is missing, the tool names the CSV header in its error.
+If a row has a missing, empty or whitespace-only wave, it names the file and line. In either case it exits with
+code 2 before changing any Ogg file. Missing optional subtitle fields are treated as empty text.
+
 Dialogue wave names are matched without case. Repeated rows are accepted when they produce identical tags,
 including after subtitle markup is removed. Conflicting labels, speakers or subtitles stop the pass with a CSV
 line diagnostic before any Ogg file is modified; this also applies to `--dry-run`.

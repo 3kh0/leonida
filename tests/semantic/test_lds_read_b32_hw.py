@@ -189,5 +189,63 @@ class TestScalarInterpreter(unittest.TestCase):
         self.state.step(inst)
         self.assertEqual(self.state.vgprs[4], 0x11111111)
 
+class SimdState:
+    def __init__(self, num_lanes: int = 32, lds_size: int = LDS_DEFAULT_SIZE) -> None:
+        self.num_lanes = num_lanes
+        self.vgprs = [[0] * num_lanes for _ in range(256)]
+        self.lds = bytearray(lds_size)
+        self.lds_size = lds_size
+        self.exec_mask = (1 << num_lanes) - 1
+
+    def step(self, inst: DSReadB32Inst) -> None:
+        for lane in range(self.num_lanes):
+            if (self.exec_mask >> lane) & 1:
+                vaddr = self.vgprs[inst.vaddr.index][lane]
+                val = ds_read_b32_ref(self.lds, vaddr, inst.offset, self.lds_size)
+                self.vgprs[inst.vdst.index][lane] = val
+
+
+class TestSimdDivergence(unittest.TestCase):
+    def test_simd_independent_lane_addresses(self) -> None:
+        simd = SimdState(num_lanes=32)
+        for lane in range(32):
+            simd.vgprs[1][lane] = lane * 4
+            val = 0xA0000000 | (lane << 8) | lane
+            for k in range(4):
+                simd.lds[lane * 4 + k] = (val >> (k * 8)) & 0xFF
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 4), RegSingle(RegType.VGPR, 1))
+        simd.step(inst)
+        for lane in range(32):
+            expected = 0xA0000000 | (lane << 8) | lane
+            self.assertEqual(simd.vgprs[4][lane], expected, f"lane {lane}")
+
+    def test_wave32_exec_masking(self) -> None:
+        simd = SimdState(num_lanes=32)
+        simd.exec_mask = 0x0000FFFF
+        for lane in range(32):
+            simd.vgprs[1][lane] = 0x100
+            simd.vgprs[2][lane] = 0xFEEDFACE
+        simd.lds[0x100:0x104] = bytes([0x11, 0x22, 0x33, 0x44])
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 2), RegSingle(RegType.VGPR, 1))
+        simd.step(inst)
+        for lane in range(32):
+            if lane < 16:
+                self.assertEqual(simd.vgprs[2][lane], 0x44332211)
+            else:
+                self.assertEqual(simd.vgprs[2][lane], 0xFEEDFACE)
+
+    def test_wave64_divergence(self) -> None:
+        simd = SimdState(num_lanes=64)
+        simd.exec_mask = 0xFFFFFFFFFFFFFFFF
+        for lane in range(64):
+            simd.vgprs[0][lane] = 0x200 + lane * 4
+            val = 0x70000000 + lane
+            for k in range(4):
+                simd.lds[0x200 + lane * 4 + k] = (val >> (k * 8)) & 0xFF
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 6), RegSingle(RegType.VGPR, 0))
+        simd.step(inst)
+        for lane in range(64):
+            self.assertEqual(simd.vgprs[6][lane], 0x70000000 + lane)
+
 if __name__ == "__main__":
     unittest.main()

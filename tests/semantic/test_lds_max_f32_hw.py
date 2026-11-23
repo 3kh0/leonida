@@ -574,6 +574,51 @@ class TestDSMaxF32SIMDDivergenceAndExecMask(unittest.TestCase):
             interp.execute_wave(wave, inst, arbitration_order=order)
             self.assertEqual(lds.read_dword(0x40), global_max_bits)
 
+class TestDSMaxF32RegisterAliasing(unittest.TestCase):
+    """Part 5: Register aliasing and in-place operand preservation."""
+
+    def setUp(self) -> None:
+        self.lds = LDSMemory(size_bytes=4096)
+        self.interp = ScalarDSInterpreter(self.lds)
+
+    def test_aliasing_vdst_equals_vaddr(self) -> None:
+        state = ScalarThreadState(self.lds)
+        self.lds.write_dword(0x50, TWO_F32)
+        state.set_vgpr(VGPR(1), 0x50)
+        state.set_vgpr(VGPR(2), TEN_F32)
+
+        inst = DSMaxF32Instruction.parse("ds_max_rtn_f32 v1, v1, v2")
+        res = self.interp.execute(state, inst)
+
+        self.assertEqual(res, TWO_F32)
+        self.assertEqual(state.get_vgpr(VGPR(1)), TWO_F32)
+        self.assertEqual(self.lds.read_dword(0x50), TEN_F32)
+
+    def test_aliasing_vdst_equals_vdata0(self) -> None:
+        state = ScalarThreadState(self.lds)
+        self.lds.write_dword(0x60, TEN_F32)
+        state.set_vgpr(VGPR(1), 0x60)
+        state.set_vgpr(VGPR(2), TWO_F32)
+
+        inst = DSMaxF32Instruction.parse("ds_max_rtn_f32 v2, v1, v2")
+        res = self.interp.execute(state, inst)
+
+        self.assertEqual(res, TEN_F32)
+        self.assertEqual(state.get_vgpr(VGPR(2)), TEN_F32)
+        self.assertEqual(self.lds.read_dword(0x60), TEN_F32)
+
+    def test_aliasing_vaddr_equals_vdata0(self) -> None:
+        state = ScalarThreadState(self.lds)
+        self.lds.write_dword(0x40, NEG_ONE_F32)
+        state.set_vgpr(VGPR(1), 0x40)
+
+        inst_f32 = DSMaxF32Instruction.parse("ds_max_f32 v1, v1")
+        self.interp.execute(state, inst_f32)
+
+        self.assertEqual(state.get_vgpr(VGPR(1)), 0x40)
+        # 0x40 as float is subnormal ~8.9e-44, which is > -1.0
+        self.assertEqual(self.lds.read_dword(0x40), 0x40)
+
 
 if __name__ == '__main__':
     unittest.main()

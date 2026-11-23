@@ -15,6 +15,7 @@ min, max and median are the smallest, largest and median file size in bytes amon
 scope. For an even count the median is the lower of the two middle sizes (statistics.median_low), so every value
 in the report is an integer. A class only appears when it has at least one file, so the stats keys are never null.
 The tool keeps one size (a plain Python int) per file per class to compute these.
+An index.json is read as utf-8-sig, so a copy re-saved with a UTF-8 BOM (Notepad's default "UTF-8") still classifies.
 """
 import json
 import os
@@ -41,7 +42,8 @@ def classify(r):
 
 
 def index_rows(path):
-    with open(path, encoding="utf-8") as f:
+    # utf-8-sig: a carve index re-saved by Notepad keeps its UTF-8 BOM, and strict utf-8 refuses that copy.
+    with open(path, encoding="utf-8-sig") as f:
         try:
             document = json.load(f)
         except ValueError:

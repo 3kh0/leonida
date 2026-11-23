@@ -171,6 +171,20 @@ class TestSCSelectB64Interpreter(unittest.TestCase):
         self.assertEqual((state.sgpr[0], state.sgpr[1]), (0xCCCC0000, 0x0000DDDD))
         self.assertEqual(state.scc, 0)
 
+class TestSCSelectB64EdgeCases(unittest.TestCase):
+    def test_64bit_extremes(self):
+        r_lo, r_hi = ref_s_cselect_b64(1, 0xFFFFFFFF, 0xFFFFFFFF, 0, 0)
+        self.assertEqual((r_lo, r_hi), (0xFFFFFFFF, 0xFFFFFFFF))
+        r_lo, r_hi = ref_s_cselect_b64(0, 0xFFFFFFFF, 0xFFFFFFFF, 0, 0)
+        self.assertEqual((r_lo, r_hi), (0, 0))
+
+    def test_scc_preserved(self):
+        state = SaluInterpreterState()
+        for initial_scc in (0, 1):
+            state.scc = initial_scc
+            state.step(SaluInstruction("s_cselect_b64", dst=0, s0=2, s1=4))
+            self.assertEqual(state.scc, initial_scc)
+
 
 if __name__ == "__main__":
     unittest.main()

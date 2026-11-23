@@ -234,7 +234,9 @@ def main(argv=None) -> int:
     try:
         stats = tag_folder(a.opus, names, dialogue, langs, a.dry_run, ambiguous)
     except OSError as e:
-        print(f"opus_tags: error: {e}", file=sys.stderr)
+        # the path as typed, not str(e)'s repr of it (which doubles every Windows backslash)
+        where = f"{e.filename}: " if e.filename is not None else ""
+        print(f"opus_tags: error: {where}{e.strerror or e}", file=sys.stderr)
         return 2
     for k, v in stats.items():
         print(f"{k:32} {v:,}")

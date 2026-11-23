@@ -171,5 +171,21 @@ class VFractF16EdgeCasesTests(unittest.TestCase):
         self.assertEqual(oracle_fract_f16(F16_NEG_INF), F16_POS_ZERO)
         self.assertTrue(is_nan_f16(oracle_fract_f16(F16_QNAN)))
 
+class VFractF16TranslatorTests(unittest.TestCase):
+    def test_fract_translation_and_execution(self):
+        lines = [
+            "v_mov_b32 v0, 0x3f00",  # 1.75 in f16
+            "v_fract_f16 v1, v0",
+            "exp mrt0 v1, v1, v1, v1 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_fract_f16_exec", lines)
+        val = mrt0_words(spv)[0] & MASK16
+        self.assertEqual(val, 0x3A00)  # 0.75 in f16
+
+    def test_fract_syntax_rejection(self):
+        with self.assertRaises(Exception):
+            translate_lines("ps_bad_fract_f16", ["v_fract_f16"])
+
 if __name__ == "__main__":
     unittest.main()

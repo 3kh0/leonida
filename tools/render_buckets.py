@@ -188,4 +188,8 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError, OSError):
+        pass
     sys.exit(main())

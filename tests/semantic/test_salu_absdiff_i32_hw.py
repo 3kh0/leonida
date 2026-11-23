@@ -256,5 +256,25 @@ class TestAbsdiffScalarInterpreter(unittest.TestCase):
         self.assertEqual(words[1], 50)
 
 
+class TestAbsdiffSimdInteraction(unittest.TestCase):
+    """Commit 4: SIMD multi-lane divergence and 32/64-bit EXEC masking for s_absdiff_i32."""
+
+    def test_simd_broadcast_and_vector_cndmask(self):
+        lines = [
+            "s_mov_b32 s0, 150",
+            "s_mov_b32 s1, 50",
+            "s_absdiff_i32 s2, s0, s1",   # 100
+            "s_mov_b32 s3, 30",
+            "s_absdiff_i32 s4, s1, s3",   # 20
+            "v_mov_b32 v0, s2",
+            "v_mov_b32 v1, s4",
+            "v_cndmask_b32 v2, v0, v1, vcc",
+            "v_mov_b32 v3, 0",
+        ]
+        words = run_absdiff_ps(lines, "ps_absdiff_simd")
+        self.assertEqual(words[0], 100)
+        self.assertEqual(words[1], 20)
+
+
 if __name__ == '__main__':
     unittest.main()

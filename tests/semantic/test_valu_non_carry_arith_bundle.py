@@ -164,6 +164,23 @@ class TestVAddNcI32Oracle(unittest.TestCase):
         self.assertEqual(ref_v_add_nc_i32(0x7FFFFFFF, 10, clamp=True), 0x7FFFFFFF)
         self.assertEqual(ref_v_add_nc_i32(0x80000000, -10, clamp=True), 0x80000000)
 
+class VAddNcI32Expr(ASTNode):
+    def __init__(self, src0: int, src1: int, clamp: bool = False) -> None:
+        self.src0 = src0
+        self.src1 = src1
+        self.clamp = clamp
+
+    def eval(self) -> int:
+        return ref_v_add_nc_i32(self.src0, self.src1, self.clamp)
+
+
+class TestVAddNcI32AST(unittest.TestCase):
+    def test_ast_evaluation(self) -> None:
+        expr = VAddNcI32Expr(500, -200)
+        self.assertEqual(expr.eval(), 300)
+        expr_cl = VAddNcI32Expr(0x7FFFFFFF, 1, clamp=True)
+        self.assertEqual(expr_cl.eval(), 0x7FFFFFFF)
+
 
 if __name__ == "__main__":
     unittest.main()

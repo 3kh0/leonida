@@ -68,6 +68,22 @@ class StreamTests(unittest.TestCase):
                             break
                     self.assertEqual(got, [{}])
 
+    def test_multi_digit_count_split_between_reads(self):
+        # review on #4946: a read that ends inside the digits of a Count after Items must not give a shorter number
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.json")
+            text = '{"Items": [{}], "Count":   1234}'
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
+            for chunk in range(1, len(text) + 2):
+                gen = rb.iter_items(path, chunk)
+                while True:
+                    try:
+                        next(gen)
+                    except StopIteration as stop:
+                        self.assertEqual(stop.value, 1234, chunk)
+                        break
+
     def test_empty_items(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_manifest(tmp, [])
@@ -124,6 +140,17 @@ class CountTests(unittest.TestCase):
             out = rb.plain(total)
             self.assertEqual(out["distinct_shaders"], {0: 1, 4: 1})
             self.assertEqual(out["shaders_if_few"][4], ["aaaa0001"])
+
+    def test_missing_shader_is_not_a_distinct_hash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            items = [{"Name": "a", "Materials": [{"RenderBucket": 6}, {"Shader": None, "RenderBucket": 6},
+                                                 {"Shader": "cccc0003", "RenderBucket": 6}]}]
+            path = write_manifest(os.path.join(tmp, "arc", "models"), items)
+            _, total, _ = rb.count([("arc", path)])
+            out = rb.plain(total)
+            self.assertEqual(out["distinct_shaders"], {6: 1})
+            self.assertEqual(out["no_shader"], 2)
+            self.assertEqual(total["materials"], 3)
 
     def test_count_mismatch_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:

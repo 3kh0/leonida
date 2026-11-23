@@ -526,11 +526,14 @@ Over the whole export (`python -I tools/render_buckets.py <export dir>`, all ten
 | 5 | 179 | 179 | 0 | 1 |
 | 6 | 19,900 | 19,900 | 0 | 3 |
 
-No material has a value outside 0-6. Bit 7 is set on 35,617 materials (1.5%), only ever on buckets 0-3. Buckets
-4 and 5 each use one shader, `fc34f08b`, as in the sample, and water uses three. A unique model is a model name
-with its vertex and triangle counts and the ordered (shader, bucket) list of its materials, so a model repeated
-across dictionaries or archives counts once (363,698 unique models). The mask rule above stays sample-only: this
-export's manifests have no `RenderBucketMask` field.
+"Materials" counts material rows, like the sample table's "Shaders" column; "Distinct shader hashes" is the
+number of different material shader hashes in that bucket. No material has a value outside 0-6, and every material
+has a shader hash. Bit 7 is set on 35,617 materials (1.5%), only ever on buckets 0-3. Buckets 4 and 5 each use one
+shader, `fc34f08b`, as in the sample, and water uses three. A unique model is a model name with its vertex and
+triangle counts and the ordered (shader, bucket) list of its materials, so a model repeated with the same list across
+dictionaries or archives counts once (363,698 unique models); the same model with its materials in another order
+would count again, and two different models agreeing on all of that would merge. The mask rule above stays
+sample-only: this export's manifests have no `RenderBucketMask` field.
 
 Names are per model and a building holds glass, decal and opaque shaders alike, so the token shares are low
 in absolute terms; the enrichment against bucket 0 is the signal. For export: bucket 1 needs blending, 2 is

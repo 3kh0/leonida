@@ -2,9 +2,13 @@
 
 ``docs/models.md`` ("Shader render buckets") describes ``RenderBucket`` (byte at shader +0x39) from a sample of
 3,000 models. This tool counts it over whole exports: for every material, ``RenderBucket & 0x7F`` and bit 7 (a
-separate flag), any value outside 0-6, and the number of distinct material shader hashes per bucket. Counts are given twice: per material row, and per unique model, so a
-model repeated in several dictionaries or archives counts once there. A unique model is the model name together with
-its vertex and triangle counts and the ordered list of (shader hash, render bucket) of its materials.
+separate flag), any value outside 0-6, and the number of distinct material shader hashes per bucket (a material
+without a shader hash is counted separately, not as a hash). Counts are given per material row and per unique model.
+A unique model is the model name together with its vertex and triangle counts and the ordered list of (shader hash,
+render bucket) of its materials: a model repeated with the same list in several dictionaries or archives counts once,
+the same model with its materials in another order counts again, and two different models that agree on all of it
+would merge. Per archive, the unique figures count the models first seen in that archive (archives in listing order),
+so they add up to the overall unique figures.
 
 Input is one or more ``manifest.json`` files, or a directory: ``<dir>/<archive>/models/manifest.json`` is used for
 every archive folder (found with ``os.listdir``, so no name is skipped), and ``<dir>`` itself if it holds a
@@ -41,12 +45,19 @@ def _count_after_items(f, buf, pos, chunk, dec):
         nonlocal buf
         while True:
             try:
-                return dec.raw_decode(buf, pos)
+                val, end = dec.raw_decode(buf, pos)
             except json.JSONDecodeError:
-                more = f.read(chunk)
-                if not more:
-                    raise
-                buf, pos = buf[pos:] + more, 0
+                val, end = None, None
+            if end is not None and end < len(buf):
+                return val, end
+            # A value that reaches the end of the buffer may go on in the next read (the digits of a number split
+            # between reads were accepted as a shorter number): read on before accepting it.
+            more = f.read(chunk)
+            if not more:
+                if end is None:
+                    raise ValueError("truncated JSON after the Items array")
+                return val, end
+            buf, pos = buf[pos:] + more, 0
 
     def skip(pos):
         nonlocal buf
@@ -147,7 +158,7 @@ def manifests(target):
 def new_totals():
     return {"models": 0, "materials": 0, "low": Counter(), "flag": 0, "flag_by_low": Counter(), "outside": 0,
             "bad": 0, "unique_models": 0, "unique_materials": 0, "unique_low": Counter(), "unique_flag": 0,
-            "shaders": {}}
+            "shaders": {}, "no_shader": 0}
 
 
 def count(paths, chunk=CHUNK):
@@ -181,7 +192,11 @@ def count(paths, chunk=CHUNK):
                     t["flag_by_low"][low] += 1
                 if low > 6 or b > 0xFF or b < 0:
                     t["outside"] += 1
-                t["shaders"].setdefault(low, set()).add(str(m.get("Shader")).lower())
+                shader = m.get("Shader")
+                if isinstance(shader, str) and shader.strip():
+                    t["shaders"].setdefault(low, set()).add(shader.strip().lower())
+                else:
+                    t["no_shader"] += 1
                 sig.append((m.get("Shader"), b))
             key = (item.get("Name"), item.get("Verts"), item.get("Tris"), tuple(sig))
             if key not in seen:
@@ -199,7 +214,7 @@ def count(paths, chunk=CHUNK):
             problems.append(f"{label}: {t['models']} items read, manifest Count says {declared}")
         t["declared_count"] = declared
         per[label] = t
-        for k in ("models", "materials", "flag", "outside", "bad"):
+        for k in ("models", "materials", "flag", "outside", "bad", "no_shader"):
             overall[k] += t[k]
         overall["low"].update(t["low"])
         for low, hashes in t["shaders"].items():
@@ -241,7 +256,8 @@ def main(argv=None) -> int:
         print(f"{low:>6}  {BUCKET_NAMES.get(low, '?'):<10}  {overall['low'][low]:>9}   {overall['unique_low'][low]:>22}   "
               f"{overall['flag_by_low'][low]:>9}   {len(overall['shaders'].get(low, ())):>16}")
     print(f"bit 7 set: {overall['flag']} materials ({overall['unique_flag']} in unique models); "
-          f"outside 0-6: {overall['outside']}; unreadable bucket: {overall['bad']}")
+          f"outside 0-6: {overall['outside']}; unreadable bucket: {overall['bad']}; "
+          f"materials without a shader hash: {overall['no_shader']}")
     for p in problems:
         print("problem:", p, file=sys.stderr)
     if a.json:

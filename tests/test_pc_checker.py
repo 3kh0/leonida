@@ -48,6 +48,27 @@ class GpuScore(unittest.TestCase):
         self.assertLess(pc.gpu_score("RTX 6070"), pc.gpu_score("RTX 6080"))
 
 
+class WindowsGpuDetection(unittest.TestCase):
+    def test_cim_output_preserves_usable_adapters(self):
+        from unittest.mock import patch
+
+        cases = (
+            ("null", []),
+            ('"unexpected"', []),
+            ('{"Name": "AMD Radeon RX 580", "AdapterRAM": 2147483648}',
+             [("AMD Radeon RX 580", 2)]),
+            ('[null, {"Name": 42}, {"Name": "AMD Radeon RX 580", "AdapterRAM": "bad"}]',
+             [("AMD Radeon RX 580", None)]),
+        )
+        for payload, extra in cases:
+            with self.subTest(payload=payload):
+                with (patch.object(pc.sys, "platform", "win32"),
+                      patch.object(pc.shutil, "which", return_value="nvidia-smi"),
+                      patch.object(pc, "_run", side_effect=["NVIDIA RTX 3060, 12288", payload]),
+                      patch.object(pc, "_win_vram_map", return_value={})):
+                    self.assertEqual(pc.detect_gpus(), [("NVIDIA RTX 3060", 12), *extra])
+
+
 class CpuScore(unittest.TestCase):
     def test_explicit(self):
         self.assertEqual(pc.cpu_score("AMD Ryzen 5 5600"), 100)

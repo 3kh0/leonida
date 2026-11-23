@@ -350,6 +350,20 @@ class TestVMadF32ASTAndInterpreter(unittest.TestCase):
         words = run_bundle_ps(lines, "ps_exec_v_mad_f32")
         self.assertEqual(words[0], 0x40E00000)
 
+class TestVMadF32DenormAndEdgeCases(unittest.TestCase):
+    """Stage 3 for v_mad_f32: denormal flushing and IEEE edge cases."""
+
+    def test_v_mad_f32_denorm_flushing(self):
+        # Subnormal input flushed to zero
+        lines = [
+            "v_mov_b32 v1, 0x00000001",  # denormal
+            "v_mov_b32 v2, 0x3F800000",  # 1.0
+            "v_mov_b32 v3, 0x00000000",  # 0.0
+            "v_mad_f32 v0, v1, v2, v3",
+        ]
+        words = run_bundle_ps(lines, "ps_mad_denorm")
+        self.assertEqual(words[0], 0x00000000)
+
 
 if __name__ == '__main__':
     unittest.main()

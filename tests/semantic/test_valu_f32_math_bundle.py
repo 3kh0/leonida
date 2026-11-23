@@ -105,5 +105,63 @@ class TestFractF32Oracle(unittest.TestCase):
         self.assertEqual(ref_fract_f32(0x0000_0001), 0)
 
 
+# ------------------------------------------------------------------------------
+# v_fract_f32 AST Definitions
+# ------------------------------------------------------------------------------
+
+class OperandType(Enum):
+    VGPR = auto()
+    SGPR = auto()
+    LITERAL = auto()
+
+
+@dataclass(frozen=True)
+class RegisterOperand:
+    op_type: OperandType
+    index: int
+
+    def __post_init__(self):
+        if self.op_type == OperandType.VGPR and not (0 <= self.index <= 255):
+            raise ValueError(f"VGPR index out of range: {self.index}")
+        if self.op_type == OperandType.SGPR and not (0 <= self.index <= 105):
+            raise ValueError(f"SGPR index out of range: {self.index}")
+
+    @property
+    def name(self) -> str:
+        return f"{'v' if self.op_type == OperandType.VGPR else 's'}{self.index}"
+
+
+@dataclass(frozen=True)
+class LiteralOperand:
+    value: int
+
+    def __post_init__(self):
+        if not (-0x8000_0000 <= self.value <= MASK32):
+            raise ValueError(f"Literal 32-bit value out of range: {self.value}")
+
+
+@dataclass
+class VFractF32Instruction:
+    dst: RegisterOperand
+    src0: Union[RegisterOperand, LiteralOperand]
+
+    def __post_init__(self):
+        if self.dst.op_type != OperandType.VGPR:
+            raise TypeError("Destination of v_fract_f32 must be a VGPR")
+
+
+class TestFractF32AST(unittest.TestCase):
+    def test_ast_construction(self):
+        dst = RegisterOperand(OperandType.VGPR, 0)
+        src = RegisterOperand(OperandType.VGPR, 1)
+        insn = VFractF32Instruction(dst=dst, src0=src)
+        self.assertEqual(insn.dst.name, "v0")
+        self.assertEqual(insn.src0.name, "v1")
+
+    def test_ast_invalid_dst(self):
+        with self.assertRaises(TypeError):
+            VFractF32Instruction(dst=RegisterOperand(OperandType.SGPR, 0), src0=RegisterOperand(OperandType.VGPR, 1))
+
+
 if __name__ == '__main__':
     unittest.main()

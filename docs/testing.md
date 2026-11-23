@@ -499,7 +499,8 @@ over integrated, the first on a tie, `vulkan_device_rank` in `runtime/src/vulkan
 and a value that matches no device fails the run instead of testing
 another GPU. For the host side of the comparison tests, `LEONIDA_HOST_ADAPTER` picks the D3D12 adapter the same way.
 The GPU tools of `runtime/test/shaders` (`vk_compute_test`, `vk_harness`, ...) read it the same way through
-`vk_device_pick.h`, and fail with a message naming the filter when it matches no device.
+`vk_device_pick.h`, and fail with a message naming the filter when it matches no device. So do `vk_sandbox` and
+`vk_descriptor_bench`, whose `--device N` must then name a device the filter matches.
 
 ## Known problems
 

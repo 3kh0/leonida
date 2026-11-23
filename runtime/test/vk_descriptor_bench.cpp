@@ -11,6 +11,8 @@
 //                       [--memory all|device|host|rebar] [--device N] [--list-devices] [--quick] [--csv]
 //                       [--dump-spv PREFIX] [--self-test]
 //   LEONIDA_VK_VALIDATION=1 enables VK_LAYER_KHRONOS_validation; any validation error fails the run.
+//   LEONIDA_VK_DEVICE=<part of the name> picks the GPU as in the other tools (vk_device_pick.h); a value that matches
+//   no device, or not the --device one, fails the run.
 #define VK_NO_PROTOTYPES
 #include "vulkan_loader.h"
 #include "vk_device_pick.h"
@@ -990,7 +992,8 @@ void print_usage() {
         "                       first timed run, 0=off (default: 300; --quick turns it off)\n"
         "  --max-dispatch-ms F  auto-scale slow dispatches to avoid OS TDR, 0=off (default: 120)\n"
         "  --memory MODE        all|device|host|rebar (default: all)\n"
-        "  --device N           select physical device index from --list-devices\n"
+        "  --device N           select physical device index from --list-devices (it must match LEONIDA_VK_DEVICE\n"
+        "                       when that is set)\n"
         "  --list-devices       list Vulkan physical devices and exit\n"
         "  --quick              fast check profile (sizes 1000,10000; groups 16; iters 4; reps 3)\n"
         "  --csv                emit CSV with timing_status and empty fields for unavailable measurements\n"
@@ -1385,6 +1388,12 @@ int main(int argc, char** argv) {
         VkPhysicalDevice cand = pds[device_index];
         VkPhysicalDeviceProperties p{};
         vkGetPhysicalDeviceProperties(cand, &p);
+        if (!leonida::vulkan_device_wanted(p.deviceName)) {  // both given and they disagree: test neither
+            std::fprintf(stderr, "--device %u (%s) does not match LEONIDA_VK_DEVICE=%s\n", device_index, p.deviceName,
+                         leonida::vulkan_device_filter().c_str());
+            destroy_instance();
+            return 1;
+        }
         if (p.apiVersion < VK_API_VERSION_1_1 || !find_compute_queue(cand, qi, ts_valid_bits)) {
             std::printf("unsupported: selected device lacks Vulkan 1.1 or compute queue\n");
             destroy_instance();
@@ -1393,23 +1402,31 @@ int main(int argc, char** argv) {
         pd = cand;
         pd_props = p;
     } else {
-        auto score = [](VkPhysicalDeviceType t, std::uint32_t vendor) -> int {
-            return leonida::vk_test::device_rank(t, vendor);
-        };
-        int best_score = -1;
+        // The same choice as the other tools (vk_device_pick.h): the best-ranked Vulkan 1.1 compute device that
+        // LEONIDA_VK_DEVICE allows. A filter that matches nothing fails instead of measuring another GPU.
+        std::vector<VkPhysicalDeviceProperties> candidates;
+        std::vector<VkPhysicalDevice> eligible;
+        std::vector<std::uint32_t> queue, timestamp_bits;
         for (VkPhysicalDevice cand : pds) {
             VkPhysicalDeviceProperties p{};
             vkGetPhysicalDeviceProperties(cand, &p);
             std::uint32_t c_qi = 0, c_ts = 0;
             if (p.apiVersion < VK_API_VERSION_1_1 || !find_compute_queue(cand, c_qi, c_ts)) continue;
-            const int s = score(p.deviceType, p.vendorID);
-            if (s > best_score) {
-                best_score = s;
-                pd = cand;
-                pd_props = p;
-                qi = c_qi;
-                ts_valid_bits = c_ts;
-            }
+            candidates.push_back(p);
+            eligible.push_back(cand);
+            queue.push_back(c_qi);
+            timestamp_bits.push_back(c_ts);
+        }
+        const std::size_t chosen = leonida::vk_test::pick_device(candidates);
+        if (chosen < eligible.size()) {
+            pd = eligible[chosen];
+            pd_props = candidates[chosen];
+            qi = queue[chosen];
+            ts_valid_bits = timestamp_bits[chosen];
+        } else if (!leonida::vulkan_device_filter().empty()) {
+            leonida::vk_test::report_no_device();
+            destroy_instance();
+            return 1;
         }
     }
 

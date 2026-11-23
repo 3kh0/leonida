@@ -1,7 +1,7 @@
 ; v_fmamk_f16 / v_fmaak_f16 (translator support #1989; docs/design.md row "v_fmamk_f16, v_fmaak_f16"), run on a GPU.
 ; fmamk: D = S0 * K + S1 (printed vdst, src0, K, vsrc1); fmaak: D = S0 * S1 + K (printed vdst, src0, vsrc1, K).
 ; One rounding to f16 (fused); the result goes to the low half of D and the high half is kept.
-; Every lane computes the same values and stores eight dwords:
+; Every lane computes the same values; EXEC is cut to lane 0 before the stores, so the 32 lanes do not race on one address (as in cs_w32_new_ops). Lane 0 stores eight dwords:
 ;   out[0] = fmamk(2.0, K 3.0, 1.0) over 0xDEAD0000   = 0xDEAD4700 (7.0, high half kept; S0 * S1 + K would give 5.0)
 ;   out[1] = fmaak(2.0, 3.0, K 0.5) over 0xBEEF0000   = 0xBEEF4680 (6.5, high half kept)
 ;   out[2] = fmamk(0x3C01, K 0x3C01, 0x1000)          = 0x00003C03 (exact 1 + 2^-9 + 2^-11 + 2^-20 rounds up; rounding
@@ -40,6 +40,7 @@ v_fmaak_f16 v12, s6, v13, 0x3c00
 v_mov_b32_e32 v15, 0x5c00
 v_mov_b32_e32 v14, 0
 v_fmamk_f16 v14, v15, 0x5c00, v6
+v_cmpx_eq_u32_e32 0, v0
 v_mov_b32_e32 v25, 0
 buffer_store_dword v3, v25, s[0:3], 0 offen
 v_mov_b32_e32 v25, 4

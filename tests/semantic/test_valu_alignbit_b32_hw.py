@@ -172,5 +172,67 @@ class TestValuAlignbitB32AST(unittest.TestCase):
         self.assertEqual(instr.disasm(), "v_alignbit_b32 v5, s2, v10, s4")
 
 
+class ScalarMachineState:
+    def __init__(self, num_vgprs: int = 256, num_sgprs: int = 106) -> None:
+        self.vgprs: list[int] = [0] * num_vgprs
+        self.sgprs: list[int] = [0] * num_sgprs
+        self.scc: int = 0
+        self.vcc: int = 0
+
+    def read_operand(self, op: Operand) -> int:
+        if op.kind == OperandKind.VGPR:
+            return self.vgprs[op.index] & MASK32
+        if op.kind == OperandKind.SGPR:
+            return self.sgprs[op.index] & MASK32
+        return op.value & MASK32
+
+    def write_vgpr(self, idx: int, val: int) -> None:
+        self.vgprs[idx] = val & MASK32
+
+
+class ScalarInterpreter:
+    def step(self, instr: VAlignbitB32Instruction, state: ScalarMachineState) -> int:
+        s0 = state.read_operand(instr.src0)
+        s1 = state.read_operand(instr.src1)
+        s2 = state.read_operand(instr.src2)
+        res = ref_alignbit_b32(s0, s1, s2)
+        if instr.dst.kind == OperandKind.VGPR:
+            state.write_vgpr(instr.dst.index, res)
+        return res
+
+
+class TestValuAlignbitB32ScalarInterpreter(unittest.TestCase):
+    """Stage 3: Deterministic scalar instruction interpreter."""
+
+    def test_scalar_step_all_vgprs(self) -> None:
+        state = ScalarMachineState()
+        state.write_vgpr(1, 0x12345678)
+        state.write_vgpr(2, 0x9ABCDEF0)
+        state.write_vgpr(3, 8)
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.vgpr(1),
+            src1=Operand.vgpr(2),
+            src2=Operand.vgpr(3),
+        )
+        res = ScalarInterpreter().step(instr, state)
+        self.assertEqual(res, 0x789ABCDE)
+        self.assertEqual(state.vgprs[0], 0x789ABCDE)
+
+    def test_scalar_step_mixed_sgpr_imm(self) -> None:
+        state = ScalarMachineState()
+        state.sgprs[0] = 0x12345678
+        state.write_vgpr(1, 0x9ABCDEF0)
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(2),
+            src0=Operand.sgpr(0),
+            src1=Operand.vgpr(1),
+            src2=Operand.imm(16),
+        )
+        res = ScalarInterpreter().step(instr, state)
+        self.assertEqual(res, 0x56789ABC)
+        self.assertEqual(state.vgprs[2], 0x56789ABC)
+
+
 if __name__ == "__main__":
     unittest.main()

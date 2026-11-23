@@ -413,6 +413,29 @@ class TestVSubrevNcU32SIMD(unittest.TestCase):
             got = ref_v_subrev_nc_u32(l * 20, 1000)
             self.assertEqual(got, 1000 - l * 20)
 
+class TestVSubrevNcU32Translator(unittest.TestCase):
+    def test_translator_v_subrev_nc_u32_execution(self) -> None:
+        body = [
+            "v_mov_b32_e32 v1, 100",
+            "v_mov_b32_e32 v2, 30",
+            "v_subrev_nc_u32_e32 v3, v1, v2",  # 30 - 100 = -70 -> 0xFFFFFFBA
+            "buffer_store_dword v3, v30, s[0:3], 0 offen",
+        ]
+        results = run_cs(body, name="cs_v_subrev_nc_u32")
+        for l in range(32):
+            self.assertEqual(results[l], 0xFFFFFFBA)
+
+    def test_translator_v_subrev_nc_u32_clamp(self) -> None:
+        body = [
+            "v_mov_b32_e32 v1, 100",
+            "v_mov_b32_e32 v2, 30",
+            "v_subrev_nc_u32 v3, v1, v2 clamp",
+            "buffer_store_dword v3, v30, s[0:3], 0 offen",
+        ]
+        results = run_cs(body, name="cs_v_subrev_nc_u32_clamp")
+        for l in range(32):
+            self.assertEqual(results[l], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

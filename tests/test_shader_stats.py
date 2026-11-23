@@ -193,7 +193,17 @@ class ShaderStats(unittest.TestCase):
                     self.assertIn("stats.csv: line 4:", r.stderr)
                     self.assertIn("duplicate statistic 'Instructions'", r.stderr)
                     self.assertIn("ps_flat", r.stderr)
+                    self.assertIn("stage 'ps'", r.stderr)
                     self.assertNotIn("Traceback", r.stderr)
+
+    def test_duplicate_after_other_shader_and_stage_is_rejected(self):
+        r = self.run_stats(["ps_flat,ps,Instructions,", "ps_other,ps,Instructions,24",
+                            "ps_flat,vs,Instructions,32", "ps_flat,ps,Instructions,16"],
+                           listings={"ps_flat": PS_FLAT, "ps_other": PS_FLAT})
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("stats.csv: line 5:", r.stderr)
+        self.assertIn("duplicate statistic 'Instructions' for shader 'ps_flat' (stage 'ps')", r.stderr)
 
     def test_duplicate_unrecognised_statistic_is_also_rejected(self):
         r = self.run_stats(['ps_flat,ps,"Driver counter, raw",3',

@@ -381,9 +381,25 @@ Hash-only or opaque:
   resolves placement → archetype → model → material asset key;
 - the 0–2 GiB 7-struct family's field semantics and most of its payload;
 - `PSIN` page-directory internals beyond the chunk tags (`MNEL`/`LSNS`, `LGID`/`LRSC`, `0DRP`/`0x7a`, `CHKS`);
-- texture dictionaries: no `.#td` system page was found in the sampled `levels.rpf` windows. World textures in
-  this package are the loose RDS5 pools under `data/ttdb` plus `textures.rpf`, so placement records do not
-  carry texture names, only material/asset keys in the model resources.
+- texture dictionaries: no `.#td` system page was found in the sampled `levels.rpf` windows (how they were looked
+  for is not recorded). The asset export's full page+16 scan (rpf9-explorer's texture recovery: a zeroed 16-byte page
+  head, a zlib stream at page+16, a system page that decodes as a texture dictionary) finds 23,180 candidates and
+  recovers **1,009** standalone texture dictionaries, all at 70.80-70.92 GiB, inside the tail window above. They
+  hold 1,013 textures with only 9 distinct name hashes (1,008 dictionaries have one texture). They are not the
+  dictionaries embedded in models: none of the 1,293 levels models with embedded textures lies in that band (those
+  sit at 62.9-70.6 GiB), and the two sets share no name hash. Whether they are what a `.#td` entry name labels can't
+  be told until the RPF9 directory is decoded. No model material names them: a material binding stores its texture's
+  32-bit name hash (`rpf9dump` writes it as eight hex digits) and a dictionary entry its `Hash` (equal to
+  `joaat(Name)` for all 1,013), and none of the 418,714 distinct material texture keys in all ten `rpf9dump models`
+  manifests (20,781,927 bindings) has the hash of a `levels.rpf` dictionary entry. Of those keys, **296,789** match
+  exactly by 64-bit key (296,785 a texture-pool `AssetKey`, 137 an embedded texture's `Key`, 133 both), **8** only
+  by a 32-bit name hash in a dictionary (2 of them ambiguous: the hash is on more than one entry), and
+  **121,917** (29.1%) match nothing. Name-hash candidates are not proof of the same asset; overall 50 keys share a
+  hash with a dictionary entry (38 in `core_restofworld`'s dictionaries, 12 in `textures.rpf`'s), and 42 of those
+  also match a pool key exactly. So the material textures that resolve exactly come from the loose RDS5 pools (46
+  under `data/ttdb`, 11 under `pack/`) and a few embedded textures, and placement records do not carry texture
+  names, only material/asset keys in the model resources (`python -I tools/texture_dicts.py <export dir>`; counts
+  only).
 
 ## Location, interior, river and road names (`GameShape__Data__LocationNameLoopkup`)
 

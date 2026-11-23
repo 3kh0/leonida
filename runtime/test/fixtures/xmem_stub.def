@@ -2,3 +2,7 @@ EXPORTS
     XMemAlloc
     XMemFree
     XMemVirtualAlloc
+    XMemAllocatePhysicalPages
+    XMemFreePhysicalPages
+    XMemMapPhysicalPages
+    XMemMapPhysicalPagesScatter

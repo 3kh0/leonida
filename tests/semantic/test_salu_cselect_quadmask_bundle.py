@@ -424,6 +424,20 @@ class TestSBitset0B32Translator(unittest.TestCase):
         words = mrt0_words(spv)
         self.assertEqual(words, [0xFFFFFFEF, 0xFFFFFFEF, 0xFFFFFFEF, 0xFFFFFFEF])
 
+def ref_s_bitset1_b32(dst: int, s0: int) -> int:
+    bit = s0 & 31
+    return (dst | (1 << bit)) & MASK32
+
+
+class TestSBitset1B32Reference(unittest.TestCase):
+    def test_ref_set_bit(self):
+        self.assertEqual(ref_s_bitset1_b32(0x00000000, 4), 0x00000010)
+        self.assertEqual(ref_s_bitset1_b32(0x00000000, 0), 0x00000001)
+        self.assertEqual(ref_s_bitset1_b32(0x00000000, 31), 0x80000000)
+
+    def test_ref_set_modulo(self):
+        self.assertEqual(ref_s_bitset1_b32(0x00000000, 36), 0x00000010)
+
 
 if __name__ == "__main__":
     unittest.main()

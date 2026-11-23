@@ -185,6 +185,29 @@ class TestSCSelectB64EdgeCases(unittest.TestCase):
             state.step(SaluInstruction("s_cselect_b64", dst=0, s0=2, s1=4))
             self.assertEqual(state.scc, initial_scc)
 
+class TestSCSelectB64Translator(unittest.TestCase):
+    def test_translate_s_cselect_b64(self):
+        lines = [
+            "s_mov_b32 s2, 0x11112222",
+            "s_mov_b32 s3, 0x33334444",
+            "s_mov_b32 s4, 0x55556666",
+            "s_mov_b32 s5, 0x77778888",
+            "s_cmp_eq_u32 1, 1",
+            "s_cselect_b64 s[0:1], s[2:3], s[4:5]",
+            "v_mov_b32 v0, s0",
+            "v_mov_b32 v1, s1",
+            "s_cmp_lg_u32 1, 1",
+            "s_cselect_b64 s[0:1], s[2:3], s[4:5]",
+            "v_mov_b32 v2, s0",
+            "v_mov_b32 v3, s1",
+            "exp mrt0 v0, v1, v2, v3 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_csel64", lines)
+        self.assertIn("OpEntryPoint", spv)
+        words = mrt0_words(spv)
+        self.assertEqual(words, [0x11112222, 0x33334444, 0x55556666, 0x77778888])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -9,6 +9,7 @@ import io
 import json
 import os
 import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -221,6 +222,33 @@ class TestConversations(unittest.TestCase):
 
 
 class TestCli(unittest.TestCase):
+    def test_ambiguity_counts_normalized_candidates_and_affected_bank_ids(self):
+        first, second = "synthetic38378au_abcd_01", "synthetic42901au_abcd_01"
+        unique = "uniqueau_abcd_01"
+        with tempfile.TemporaryDirectory() as tmp:
+            banks = os.path.join(tmp, "banks")
+            os.mkdir(banks)
+            write(os.path.join(banks, "one.awc"), make_bank([first, first, unique], extra_ids=[123]))
+            write(os.path.join(banks, "two.awc"), make_bank([first], extra_ids=[123]))
+            other = write(os.path.join(tmp, "other.awc"), make_bank([unique]))
+            words = write(os.path.join(tmp, "words.json"),
+                          json.dumps([first, second, unique, "  " + unique.upper(), "noise", "NOISE"]))
+            output = os.path.join(tmp, "names.csv")
+            cli = [sys.executable, "-I", A.__file__, banks, other, "--words", words, "--out", output]
+            default = subprocess.run(cli, check=True, capture_output=True, text=True)
+            with open(output, "rb") as fh:
+                expected = fh.read()
+            diagnostic = subprocess.run([*cli, "--ambiguity"], check=True, capture_output=True, text=True)
+            self.assertNotIn("conflicting IDs", default.stdout)
+            self.assertIn("Exact dialogue: 1 repeated inputs, 1 conflicting IDs", diagnostic.stdout)
+            self.assertIn("banks: 1 conflicting IDs present in 2 bank/ID pairs, "
+                          "1 IDs without an exact dialogue candidate", diagnostic.stdout)
+            self.assertIn("other.awc: 0 conflicting IDs present in 0 bank/ID pairs, "
+                          "0 IDs without an exact dialogue candidate", diagnostic.stdout)
+            with open(output, "rb") as fh:
+                self.assertEqual(fh.read(), expected)
+            self.assertEqual([r["name"] for r in csv.DictReader(expected.decode().splitlines())], [unique, unique])
+
     def test_sources_with_same_basename_keep_separate_summaries_and_streams(self):
         with tempfile.TemporaryDirectory() as tmp:
             sources = []

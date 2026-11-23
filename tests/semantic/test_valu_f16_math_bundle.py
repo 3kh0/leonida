@@ -404,5 +404,19 @@ class VLdexpF16EdgeCasesTests(unittest.TestCase):
         # 1.0 * 2^-50 -> underflow to zero
         self.assertEqual(oracle_ldexp_f16(F16_POS_ONE, -50 & MASK16), F16_POS_ZERO)
 
+class VLdexpF16TranslatorTests(unittest.TestCase):
+    def test_ldexp_translation_and_execution(self):
+        lines = [
+            "v_mov_b32 v0, 0x3c00",  # 1.0 in f16
+            "v_mov_b32 v1, 3",
+            "v_ldexp_f16 v2, v0, v1",
+            "exp mrt0 v2, v2, v2, v2 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_ldexp_f16_exec", lines)
+        val = mrt0_words(spv)[0] & MASK16
+        self.assertEqual(val, 0x4800)  # 8.0 in f16
+
+
 if __name__ == "__main__":
     unittest.main()

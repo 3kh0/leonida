@@ -797,6 +797,9 @@ def main(argv=None) -> int:
         raise SystemExit("--obj is required unless --no-fit")
     if a.dds and not a.obj:
         raise SystemExit("--dds requires --obj so textured probes can be checked")
+    preview = os.path.join(out_dir, "image.ppm")
+    if os.path.isdir(preview):
+        raise SystemExit(f"expected a preview file at {preview}, found a directory")
 
     index = ensure_carve(game, work)
     ps_name = a.ps if a.ps is not None else (DEFAULT_TEXTURED_PS if a.dds else DEFAULT_PS)
@@ -920,12 +923,16 @@ def main(argv=None) -> int:
         prepared_manifest = os.path.join(manifest_staging, "manifest.json")
         with open(prepared_manifest, "w", encoding="utf-8", newline="\n") as f:
             json.dump(manifest, f, indent=1)
-        preview = os.path.join(out_dir, "image.ppm")
         previous_preview = os.path.join(manifest_staging, "image.ppm")
+        # Replacing a file refuses a directory that appears during preparation.
+        with open(previous_preview, "xb"):
+            pass
         try:
             os.replace(preview, previous_preview)
         except FileNotFoundError:
-            pass
+            preview_staged = False
+        else:
+            preview_staged = True
         # Keep the old preview recoverable until publication succeeds.
         try:
             try:
@@ -934,7 +941,7 @@ def main(argv=None) -> int:
                 pass
             os.replace(prepared_manifest, os.path.join(out_dir, "manifest.json"))
         except OSError:
-            if os.path.lexists(previous_preview):
+            if preview_staged:
                 os.replace(previous_preview, preview)
             raise
     print(f"{len(vertices)} vertices, {len(indices) // 3} triangles -> {out_dir}")

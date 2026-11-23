@@ -568,6 +568,47 @@ std::string describe(const Call& c) {
     return std::string(ffx::return_code_name(c.rc)) + " (" + std::to_string(c.rc) + ")";
 }
 
+bool pc_pipeline_stop(const Call& c, unsigned slot62_calls, HRESULT slot62_hr) {
+    return c.faulted && c.code == EXCEPTION_ACCESS_VIOLATION && slot62_calls > 0 && FAILED(slot62_hr);
+}
+
+bool dispatch_stop_allowed(const Call& c, bool on_vulkan, unsigned slot62_calls, HRESULT slot62_hr,
+                           unsigned formatted) {
+    // CreateRootSignature is implemented on the Vulkan device now. An access violation there is a real crash, not
+    // evidence of the old unimplemented-slot stop; only the PC device's measured null-pipeline stop is allowed.
+    const bool pipeline_stop = !on_vulkan && pc_pipeline_stop(c, slot62_calls, slot62_hr);
+    return !c.faulted || pipeline_stop || (c.code == kMsvcCppException && formatted > 0);
+}
+
+int dispatch_stop_self_test() {
+    Call ok;
+    check(dispatch_stop_allowed(ok, true, 0, S_OK, 0), "an ordinary return is accepted");
+
+    Call av;
+    av.faulted = true;
+    av.code = EXCEPTION_ACCESS_VIOLATION;
+    check(!dispatch_stop_allowed(av, true, 0, S_OK, 0),
+          "a Vulkan access violation is a failure, not an expected stop");
+    check(!dispatch_stop_allowed(av, true, 1, E_INVALIDARG, 0),
+          "a failed Vulkan pipeline creation does not excuse an access violation");
+    check(dispatch_stop_allowed(av, false, 1, E_INVALIDARG, 0),
+          "the documented PC null-pipeline stop remains accepted");
+    check(!dispatch_stop_allowed(av, false, 1, S_OK, 0),
+          "an access violation without a failed PC pipeline is a failure");
+
+    Call thrown;
+    thrown.faulted = true;
+    thrown.code = kMsvcCppException;
+    check(dispatch_stop_allowed(thrown, true, 0, S_OK, 1),
+          "the DLL's formatted HRESULT exception remains accepted");
+    check(!dispatch_stop_allowed(thrown, true, 0, S_OK, 0),
+          "an unexplained C++ exception is a failure");
+
+    std::printf("fsr_dispatch_test --self-test: %s (%d failure%s)\n", g_failures ? "FAILED" : "OK", g_failures,
+                g_failures == 1 ? "" : "s");
+    return g_failures ? 1 : 0;
+}
+
 void* symbol(rt::Module& m, const char* name) {
     auto it = m.exports.find(name);
     return it == m.exports.end() ? nullptr : it->second;
@@ -622,8 +663,9 @@ auto module_tls_index(const M& m, long) -> decltype(m.tls_slot, uint32_t()) { re
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // keep every line if the DLL takes the process down
+    if (argc == 2 && std::strcmp(argv[1], "--self-test") == 0) return dispatch_stop_self_test();
     const std::string game_dir_arg = env("LEONIDA_GAME_DIR");
     if (game_dir_arg.empty()) {
         std::printf("SKIP (no package)\n");
@@ -961,19 +1003,15 @@ int main() {
                     note("  device slot 62 (compute pipeline from a D3D12_COMPUTE_PIPELINE_STATE_DESC) called " +
                          std::to_string(g_slot62_calls) + "x, last HRESULT " + hex(static_cast<uint32_t>(g_slot62_hr)));
                     if (g_formatted) note("  the DLL formatted HRESULT " + hex(g_first_formatted));
-                    // On a PC device both pipeline paths fail (neither slot 67's nor 62's code is a PC shader); on the
-                    // Vulkan device CreateRootSignature (slot 16) is not implemented yet. Either way the dispatch goes
-                    // on with a null pipeline and faults when it records it (RVA 0x65ff reads the pipeline's +0x10,
-                    // the same pointer it passes to SetPipelineState): a documented stop, not a test failure.
-                    pipeline_stop = c.faulted && c.code == EXCEPTION_ACCESS_VIOLATION && g_slot62_calls > 0 &&
-                                    FAILED(g_slot62_hr);
-                    const bool vulkan_stop = on_vulkan && c.faulted && c.code == EXCEPTION_ACCESS_VIOLATION;
+                    // On a PC device both pipeline paths fail (neither slot 67's nor 62's code is a PC shader). The
+                    // dispatch goes on with a null pipeline and faults when it records it (RVA 0x65ff reads the
+                    // pipeline's +0x10, the same pointer it passes to SetPipelineState): a documented stop, not a test
+                    // failure. The Vulkan device implements CreateRootSignature (slot 16), so an access violation on
+                    // that path is a test failure, not an expected stop.
+                    pipeline_stop = pc_pipeline_stop(c, g_slot62_calls, g_slot62_hr);
                     if (pipeline_stop)
                         note("ffxDispatch stopped where the PC refused the DLL's compute pipeline, not a crash");
-                    else if (vulkan_stop)
-                        note("ffxDispatch stopped where the Vulkan device returned E_NOTIMPL for CreateRootSignature");
-                    check(!c.faulted || pipeline_stop || vulkan_stop ||
-                              (c.code == kMsvcCppException && g_formatted > 0),
+                    check(dispatch_stop_allowed(c, on_vulkan, g_slot62_calls, g_slot62_hr, g_formatted),
                           "ffxDispatch returns, or stops at a documented limit");
                     note("ffxDispatch: device slots below are the ones it called");
                     print_list_hits();

@@ -690,7 +690,7 @@ def fssm_sha256_file(disasm_path, name):
 def fspx_code_sha256_file(disasm_path, name):
     """SHA-256 hex digest of <disasm_dir>/../fspx/<name>.code, the kind-6 program tools/fspx_unpack.py writes for an
     FSPX shader without an FSSM blob, or None. The run time computes the same key from the bytes a compute PSO gets
-    (docs/fspx.md, "Run-time lookup")."""
+    (docs/fspx.md, "Build and run-time lookup")."""
     parent = os.path.dirname(os.path.dirname(os.path.realpath(disasm_path)))
     if os.path.isfile(os.path.join(parent, "fssm", name + ".fssm")):
         return None

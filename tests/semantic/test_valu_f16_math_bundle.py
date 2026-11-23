@@ -337,5 +337,34 @@ class VFrexpMantF16TranslatorTests(unittest.TestCase):
         val = mrt0_words(spv)[0] & MASK16
         self.assertEqual(val, 0x3800)  # 0.5 in f16
 
+# -----------------------------------------------------------------------------
+# Opcode 4: v_ldexp_f16
+# -----------------------------------------------------------------------------
+def oracle_ldexp_f16(u: int, scale_i16: int) -> int:
+    """Reference mathematical oracle for v_ldexp_f16."""
+    u &= MASK16
+    if is_nan_f16(u) or is_inf_f16(u) or (u & 0x7FFF) == 0:
+        return u
+    sgn = u & 0x8000
+    f = u16_to_f16(u)
+    # Scale integer clamped to [-64, 64]
+    si = scale_i16 if scale_i16 < 0x8000 else scale_i16 - 0x10000
+    si = max(-64, min(64, si))
+    try:
+        res = math.ldexp(f, si)
+        if res == 0.0:
+            return sgn
+        return f16_to_u16(res)
+    except OverflowError:
+        return sgn | F16_POS_INF
+
+
+class VLdexpF16OracleTests(unittest.TestCase):
+    def test_ldexp_basic(self):
+        # 1.0 * 2^3 = 8.0 (0x4800)
+        self.assertEqual(oracle_ldexp_f16(F16_POS_ONE, 3), 0x4800)
+        # 1.0 * 2^-2 = 0.25 (0x3400)
+        self.assertEqual(oracle_ldexp_f16(F16_POS_ONE, -2 & MASK16), 0x3400)
+
 if __name__ == "__main__":
     unittest.main()

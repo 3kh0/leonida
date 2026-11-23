@@ -324,6 +324,70 @@ class OpusInputSelectionTest(unittest.TestCase):
 
 
 class GranuleTest(unittest.TestCase):
+    def _stream_with_granules(self, granules):
+        head = b"OpusHead" + struct.pack("<BBHIhB", 1, 1, 312, 48000, 0, 0)
+        data = awc_opus.ogg_page(10, 0, 0, [head], 2)
+        data += awc_opus.ogg_page(10, 1, 0, [b"OpusTags" + bytes(8)], 0)
+        for index, granule in enumerate(granules):
+            flags = 4 if index == len(granules) - 1 else 0
+            packets = [b"\xf8\xff\xfe"] if granule >= 0 else []
+            data += awc_opus.ogg_page(10, index + 2, granule, packets, flags)
+        return data
+
+    def test_trim_requires_ordered_granules(self):
+        cases = (
+            ("forward", (960, 1920), 1608),
+            ("equal EOS", (960, 960), 648),
+            ("backward EOS", (1272, 792), 0),
+            ("backward intermediate", (1272, 1000, 2232), 0),
+            ("unknown page", (960, -1, 1920), 1608),
+            ("unknown before audio", (-1, 960, 1920), 1608),
+            ("unknown EOS", (960, -1), 0),
+            ("invalid negative", (960, -2, 1920), 0),
+            ("backward after unknown", (1272, -1, 792), 0),
+            ("backward to zero", (1272, 0, 2232), 0),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "sample.ogg")
+            for name, granules, expected in cases:
+                with self.subTest(name=name):
+                    path.write_bytes(self._stream_with_granules(granules))
+                    self.assertEqual(audio_wav.ogg_output_samples(str(path)), expected)
+
+    def test_decode_does_not_add_a_trim_from_backward_granules(self):
+        def decode_output(cmd, **kwargs):
+            Path(cmd[-1]).write_bytes(b"synthetic decoded WAV")
+            return subprocess.CompletedProcess(cmd, 0, stderr="")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src, dst = Path(tmp, "sample.ogg"), Path(tmp, "output.wav")
+            for granules, samples in (((960, 1920), 1608), ((1272, 792), 0)):
+                with self.subTest(granules=granules):
+                    src.write_bytes(self._stream_with_granules(granules))
+                    with mock.patch.object(audio_wav.subprocess, "run", side_effect=decode_output) as run:
+                        self.assertEqual(audio_wav.decode("ffmpeg", str(src), str(dst)), (True, ""))
+                    cmd = run.call_args.args[0]
+                    self.assertEqual("-af" in cmd, bool(samples))
+                    if samples:
+                        self.assertIn(f"atrim=end_sample={samples}", cmd)
+
+    def test_source_digest_does_not_add_a_trim_from_backward_granules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp, "sample.ogg")
+            for granules, samples in (((960, 1920), 1608), ((1272, 792), 0)):
+                with self.subTest(granules=granules):
+                    src.write_bytes(self._stream_with_granules(granules))
+                    proc = mock.MagicMock()
+                    proc.__enter__.return_value = proc
+                    proc.stdout = io.BytesIO(b"RIFF" + bytes(4) + b"WAVEsynthetic PCM")
+                    proc.wait.return_value = 0
+                    with mock.patch.object(audio_wav.subprocess, "Popen", return_value=proc) as launch:
+                        self.assertIsNotNone(audio_wav.audio_digest("ffmpeg", str(src), source=True))
+                    cmd = launch.call_args.args[0]
+                    self.assertEqual("-af" in cmd, bool(samples))
+                    if samples:
+                        self.assertIn(f"atrim=end_sample={samples}", cmd)
+
     def test_trim_requires_identifiable_matching_endpoints(self):
         # A 240-channel family-255 header occupies two laces. Every output maps to the same mono stream.
         head = b"OpusHead" + struct.pack("<BBHIhBBB", 1, 240, 312, 48000, 0, 255, 1, 0) + bytes(240)

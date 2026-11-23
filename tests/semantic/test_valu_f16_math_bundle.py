@@ -187,5 +187,34 @@ class VFractF16TranslatorTests(unittest.TestCase):
         with self.assertRaises(Exception):
             translate_lines("ps_bad_fract_f16", ["v_fract_f16"])
 
+# -----------------------------------------------------------------------------
+# Opcode 2: v_frexp_exp_i16_f16
+# -----------------------------------------------------------------------------
+def oracle_frexp_exp_i16_f16(u: int) -> int:
+    """Reference mathematical oracle for v_frexp_exp_i16_f16."""
+    u &= MASK16
+    if is_nan_f16(u) or is_inf_f16(u):
+        return 0
+    f = u16_to_f16(u)
+    if f == 0.0:
+        return 0
+    e = (u >> 10) & 0x1F
+    frac = u & 0x03FF
+    if e == 0:
+        # Denormal: find leading bit in 10-bit frac
+        msb = frac.bit_length() - 1
+        return (1 - (10 - msb) - 14) & MASK16
+    return (e - 14) & MASK16
+
+
+class VFrexpExpI16F16OracleTests(unittest.TestCase):
+    def test_frexp_exp_basic(self):
+        # 1.0 (0x3c00): 1.0 = 0.5 * 2^1 -> exp is 1
+        self.assertEqual(oracle_frexp_exp_i16_f16(F16_POS_ONE), 1)
+        # 4.0: 4.0 = 0.5 * 2^3 -> exp is 3
+        self.assertEqual(oracle_frexp_exp_i16_f16(f16_to_u16(4.0)), 3)
+        # 0.25: 0.25 = 0.5 * 2^-1 -> exp is -1 (0xFFFF)
+        self.assertEqual(oracle_frexp_exp_i16_f16(f16_to_u16(0.25)), (-1) & MASK16)
+
 if __name__ == "__main__":
     unittest.main()

@@ -35,6 +35,7 @@ on:
       - "tools/mc_command.py"
       - "tools/mesh_compute_vs.py"
       - "tools/rdna2spirv.py"
+      - "tools/replace_retry.py"
       - "tools/report_paths.py"
       - "tools/shader_carve.py"
       - "tools/shader_disasm.py"
@@ -49,6 +50,7 @@ on:
       - "tools/wave64_emulate_opt.py"
       - "tools/wave64_halves.py"
       - "tools/xdxr_bvh.py"
+      - "tools/xdxr_bvh32.py"
   pull_request:
     paths:
       - "runtime/**"
@@ -73,6 +75,7 @@ on:
       - "tools/mc_command.py"
       - "tools/mesh_compute_vs.py"
       - "tools/rdna2spirv.py"
+      - "tools/replace_retry.py"
       - "tools/report_paths.py"
       - "tools/shader_carve.py"
       - "tools/shader_disasm.py"
@@ -87,6 +90,7 @@ on:
       - "tools/wave64_emulate_opt.py"
       - "tools/wave64_halves.py"
       - "tools/xdxr_bvh.py"
+      - "tools/xdxr_bvh32.py"
   workflow_dispatch:
 
 permissions:

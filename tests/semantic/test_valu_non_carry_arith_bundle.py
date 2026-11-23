@@ -257,6 +257,11 @@ class TestVSubNcU32AST(unittest.TestCase):
         expr_cl = VSubNcU32Expr(10, 100, clamp=True)
         self.assertEqual(expr_cl.eval(), 0)
 
+class TestVSubNcU32WrappingAndSaturation(unittest.TestCase):
+    def test_unsigned_underflow(self) -> None:
+        self.assertEqual(ref_v_sub_nc_u32(0, MASK32, clamp=False), 1)
+        self.assertEqual(ref_v_sub_nc_u32(0, MASK32, clamp=True), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -273,29 +273,36 @@ bool run(ID3D12Device& device, UINT width, UINT height, UINT64 tile_copy_offset,
             return false;
         }
     }
-    // AMD's D3D12 (Radeon 610M, AMD 26.11.2) gave 0xffffffff for every texel that its COPY queue read from the
-    // tiled texture after the DIRECT queue's mappings, the fence handoff notwithstanding, in 24 of 25 runs (one
-    // matched); its DIRECT-queue reads were right. When every COPY-queue texel of a native run is 0xffffffff,
-    // report it and leave that run out of the comparison (the case is there for the layer's cross-family handoff,
-    // which is checked against the texels).
+    // AMD's D3D12 COPY queue can read the tiled texture as if the DIRECT queue's mappings had not happened, the fence
+    // handoff notwithstanding: every texel 0xffffffff on a Radeon 610M (AMD 26.11.2, 24 of 25 runs; one matched),
+    // every texel 0 on an RX 9070 XT (3 of 40 runs). When every COPY-queue texel of a native run is one of those
+    // values and every DIRECT-queue read (initially unbound, remap) is right, report it and leave that run out of
+    // the comparison (the case is there for the layer's cross-family handoff, which is checked against the texels).
     if (!layer && separate_copy_queue) {
-        UINT checked = 0, all_ones = 0;
+        UINT copy_reads = 0, copy_uniform = 0, direct_reads = 0, direct_right = 0;
+        const auto first_copy_value = read_pixel(image_bytes + tile_copy_offset + tile_bytes);  // tile 1 reads tile 0
         for (UINT tile = 0; tile < tiles; ++tile) {
             const UINT first_y = (tile / 2) * tile_height, first_x = (tile % 2) * tile_width;
             const UINT rows = std::min(tile_height, height - first_y), columns = std::min(tile_width, width - first_x);
             for (UINT y = 0; y < rows; ++y)
-                for (UINT x = 0; x < columns && ((tile ^ 1) % 2) * tile_width + x < width; ++x) {
+                for (UINT x = 0; x < columns; ++x) {
                     const auto tiled = tile_copy_offset + tile * tile_bytes + y * row_pitch + x * sizeof(std::uint32_t);
+                    direct_reads += 2;
+                    direct_right += (read_pixel(tiled) == 0) +
+                                    (read_pixel(2 * image_bytes + tiled) == (tile < 2 ? pixel(0, x, y) : 0));
+                    if (((tile ^ 1) % 2) * tile_width + x >= width) continue;
                     const auto row_major = row_major_offset +
                                            ((first_y + y) * full_width + first_x + x) * sizeof(std::uint32_t);
-                    checked += 2;
-                    all_ones += (read_pixel(image_bytes + tiled) == 0xffffffffu) +
-                                (read_pixel(row_major) == 0xffffffffu);
+                    copy_reads += 2;
+                    copy_uniform += (read_pixel(image_bytes + tiled) == first_copy_value) +
+                                    (read_pixel(row_major) == first_copy_value);
                 }
         }
-        if (checked && all_ones == checked) {
-            std::printf("Native D3D12 COPY queue read all %u tiled texels as 0xffffffff after the DIRECT queue's "
-                        "mappings (a host difference, reported; the layer is checked against the texels)\n", checked);
+        if ((first_copy_value == 0 || first_copy_value == 0xffffffffu) && copy_reads && copy_uniform == copy_reads &&
+            direct_right == direct_reads) {
+            std::printf("Native D3D12 COPY queue read all %u tiled texels as %#x after the DIRECT queue's mappings, "
+                        "its %u DIRECT-queue reads right (a host difference, reported; the layer is checked against "
+                        "the texels)\n", copy_reads, first_copy_value, direct_reads);
             readback->Unmap(0, &empty);
             if (native_host_difference) *native_host_difference = true;
             return true;

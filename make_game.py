@@ -771,13 +771,22 @@ def cross_build_missing() -> list:
     return missing
 
 
+def dotnet_host() -> str | None:
+    host = shutil.which("dotnet")
+    if host or not sys.platform.startswith("linux"):
+        return host
+    root = os.environ.get("DOTNET_ROOT") or os.path.expanduser("~/.dotnet")
+    return shutil.which(os.path.abspath(os.path.join(root, "dotnet")))
+
+
 def dotnet_sdk_ok() -> bool:
     """True if a .NET SDK 8 or newer is installed. `dotnet` is also on PATH with only a runtime, and then
     `dotnet build` fails with "No .NET SDKs were found"."""
-    if not shutil.which("dotnet"):
+    host = dotnet_host()
+    if not host:
         return False
     try:
-        r = subprocess.run(["dotnet", "--list-sdks"], capture_output=True, text=True, timeout=60)
+        r = subprocess.run([host, "--list-sdks"], capture_output=True, text=True, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return False
     return any(int(m) >= 8 for m in re.findall(r"^(\d+)\.", r.stdout, re.M))
@@ -1471,11 +1480,22 @@ def rpf9dump(work: str) -> str:
     core = os.path.join(ROOT, "third_party", "rpf9-explorer", "Core")
     if not os.path.isdir(core):
         fail("third_party/rpf9-explorer is empty. Run: git submodule update --init")
-    need("dotnet", "Install the .NET 8 SDK.")
+    host = dotnet_host() or "dotnet"
+    need(host, "Install the .NET 8 SDK.")
     log("assets: building rpf9dump")
-    run(["dotnet", "build", os.path.join(TOOLS, "rpf9dump", "rpf9dump.csproj"), "-c", "Release",
+    run([host, "build", os.path.join(TOOLS, "rpf9dump", "rpf9dump.csproj"), "-c", "Release",
          "-o", os.path.dirname(exe), "--nologo", "-v", "q"])
     return exe
+
+
+def rpf9dump_command(work: str) -> list[str]:
+    exe = rpf9dump(work)
+    # The apphost cannot always discover a private framework. Use the same dotnet to launch its
+    # managed assembly; a standalone exporter or a regular installation still runs directly.
+    if sys.platform.startswith("linux") and not shutil.which("dotnet") and os.path.isfile(exe + ".dll"):
+        if host := dotnet_host():
+            return [host, exe + ".dll"]
+    return [exe]
 
 
 def ttpf_manifest(pool_dir: str) -> dict | None:
@@ -1513,7 +1533,7 @@ def assets(game: str, work: str, wav: bool, jobs: int) -> None:
         sys.path.insert(0, TOOLS)
     import ttpf_assets
 
-    get_exporter = functools.cache(rpf9dump)
+    get_exporter = functools.cache(rpf9dump_command)
     out = os.path.join(work, "assets")
     # An export also depends on the decoder, so its digest is kept beside the manifest, written before the export
     # starts. A folder without it (from before the file existed) or with another one is exported again, as the
@@ -1537,7 +1557,7 @@ def assets(game: str, work: str, wav: bool, jobs: int) -> None:
             os.makedirs(folder, exist_ok=True)
             with open(record, "w", encoding="utf-8", newline="\n") as f:
                 f.write(decoder + "\n")
-            run([get_exporter(work), mode, src, out])
+            run([*get_exporter(work), mode, src, out])
     # Texture pools: data/ttdb/** and each pack's own pack/<name>/data/ttdb/** (pool names repeat across packs,
     # so pack pools go under ttpf_pack/<pack>/).
     pools = []
@@ -1566,7 +1586,7 @@ def assets(game: str, work: str, wav: bool, jobs: int) -> None:
         manifest = ttpf_manifest(pool_dir)
         if manifest is None:
             log(f"assets: texture pool {os.path.relpath(p, game)}")
-            run([get_exporter(work), "ttpf", p, root])
+            run([*get_exporter(work), "ttpf", p, root])
             manifest = ttpf_manifest(pool_dir)
             if manifest is None:
                 fail(f"Texture exporter did not publish a complete manifest in {pool_dir}")
@@ -1575,7 +1595,7 @@ def assets(game: str, work: str, wav: bool, jobs: int) -> None:
             log(f"assets: {name}: {written} full BCPack DDS written, {blocked} limited (see manifest.json)")
     if not os.path.isfile(os.path.join(out, "audio", "audio_manifest.json")):
         log("assets: audio banks")
-        run([get_exporter(work), "audio", os.path.join(game, "audio.rpf"), out])
+        run([*get_exporter(work), "audio", os.path.join(game, "audio.rpf"), out])
     # The two audio steps below count as finished only by a marker written after they succeed: their folders are
     # created first and exist after a stopped run too.
     ogg = os.path.join(out, "audio", "ogg")
@@ -1595,7 +1615,7 @@ def assets(game: str, work: str, wav: bool, jobs: int) -> None:
     xma_done = os.path.join(out, "audio", "xma.done")
     if not os.path.isfile(xma_done):
         log("assets: XMA2 streams")
-        run([get_exporter(work), "xma", os.path.join(game, "audio.rpf"), out])
+        run([*get_exporter(work), "xma", os.path.join(game, "audio.rpf"), out])
         mark(xma_done, "rpf9dump xma")
     # Every run: decodes what a stopped or failed run left, and everything once ffmpeg is installed later.
     ff = shutil.which("ffmpeg")

@@ -108,7 +108,8 @@ Your game folder is the one that holds `MicrosoftGame.Config` and the `.rpf` arc
 - **Your own copy** of the Xbox Series package, version 1.0.2.1.
 - **Windows 10/11 x64**, with about **350 GB** free for work files. They can go on another drive with `--work`.
 - [Python 3.12+](https://www.python.org/downloads/) (tick "Add python.exe to PATH").
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0).
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0). On Linux the asset build also finds a per-user
+  SDK in `DOTNET_ROOT` or `~/.dotnet` when `dotnet` is missing from `PATH`.
 - [Vulkan SDK](https://vulkan.lunarg.com/), for `spirv-as` / `spirv-val`.
 - [LLVM 21+](https://github.com/llvm/llvm-project/releases) with the **AMDGPU target** for `llvm-mc`. The official
   Windows build has no AMDGPU target. On Windows, `scripts\build_llvm_mc.ps1` builds a native `llvm-mc.exe` with it

@@ -7,6 +7,7 @@ No game data: stage selection uses mocks, and the packaging and discovery tests 
 import io
 import json
 import os
+from pathlib import Path
 import shlex
 import subprocess
 import sys
@@ -21,6 +22,46 @@ if ROOT not in sys.path:
 import make_game  # noqa: E402
 
 STAGE_FUNCS = ("shaders", "assets", "runtime", "pipelines")
+
+
+@unittest.skipUnless(sys.platform.startswith("linux"), "Linux SDK discovery")
+class PrivateDotnetTest(unittest.TestCase):
+    def setUp(self):
+        self.home = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(mock.patch.dict(os.environ, {"HOME": str(self.home), "PATH": "", "DOTNET_ROOT": ""}))
+        self.private = self.install(self.home / ".dotnet")
+
+    @staticmethod
+    def install(root, sdk="8.0.100"):
+        root.mkdir()
+        host = root / "dotnet"
+        host.write_text(f"#!/bin/sh\nprintf '%s\\n' '{sdk}'\n", encoding="utf-8", newline="\n")
+        host.chmod(0o755)
+        return host
+
+    def test_private_custom_and_system_hosts(self):
+        self.assertTrue(make_game.dotnet_sdk_ok())
+        self.assertEqual(make_game.dotnet_host(), str(self.private))
+        custom = self.install(self.home / "private sdk", sdk="6.0.100")
+        os.environ["DOTNET_ROOT"] = str(custom.parent)
+        self.assertEqual(make_game.dotnet_host(), str(custom))
+        self.assertFalse(make_game.dotnet_sdk_ok())
+        system = self.install(self.home / "bin")
+        os.environ["PATH"] = str(system.parent)
+        self.assertEqual(make_game.dotnet_host(), str(system))
+        self.assertTrue(make_game.dotnet_sdk_ok())
+
+    def test_private_build_and_export_use_the_same_host(self):
+        work = str(self.home / "work")
+        core = self.home / "third_party" / "rpf9-explorer" / "Core"
+        core.mkdir(parents=True)
+        assembly = Path(work) / "tools" / "rpf9dump" / "rpf9dump.dll"
+        assembly.parent.mkdir(parents=True)
+        assembly.touch()
+        with mock.patch.object(make_game, "ROOT", str(self.home)), mock.patch.object(make_game, "run") as run:
+            command = make_game.rpf9dump_command(work)
+        self.assertEqual(run.call_args.args[0][:2], [str(self.private), "build"])
+        self.assertEqual(command, [str(self.private), str(assembly)])
 
 
 class DefaultStagesTest(unittest.TestCase):

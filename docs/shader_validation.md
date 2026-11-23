@@ -1776,6 +1776,99 @@ on k + 0.5, the error's sign gives floor(p) + 1 or floor(p), and a zero error ke
 probe then exits 0 on the same iGPU: all 134 words equal the translator's in all ten runs (wave32 and wave64, five
 MODEs), including the 28 near ties.
 
+### Rounding and normalizing conversions (`tools/cvt_diff.py`)
+
+No other runner generates `v_cvt_flr_i32_f32`, `v_cvt_rpi_i32_f32`, `v_cvt_norm_*_f16` or `v_cvt_pknorm_*`: they
+are on none of the `--list-ops` lists of `vint_diff`, `pk16_diff`, `fmisc_diff` or `f32_fuzz`. Their translations
+carry hand-written rounding rules. Four of these rules were wrong until a probe measured them:
+- `+ 0.5` rounded in binary32 for `rpi`, and 0 for a NaN in `flr`/`rpi` (#1831, #1856);
+- the double-rounded `pknorm_f32` near ties (SHADER-363);
+- `flr` of a negative f32 denormal (the floor/ceil/fract row of [design.md](design.md)).
+
+`tools/cvt_diff.py` covers the eight opcodes:
+- the VOP1 `v_cvt_flr_i32_f32`, `v_cvt_rpi_i32_f32`, `v_cvt_norm_i16_f16` and `v_cvt_norm_u16_f16`, in
+  `_e32` and `_e64`;
+- the VOP3 `v_cvt_pknorm_i16_f32`, `v_cvt_pknorm_u16_f32`, `v_cvt_pknorm_i16_f16` and `v_cvt_pknorm_u16_f16`.
+
+The reference computes in exact rationals (`fractions.Fraction`), so nothing in it rounds in binary32. It shares no
+code with the translator:
+- **flr / rpi:** `sat_i32(floor(x))` and `sat_i32(floor(x + 1/2))`. `|x| >= 2^31`, ±inf and NaN saturate by the
+  sign bit. An f32 denormal reads as zero.
+- **norm / pknorm:** `round_even(clamp(x, lo, 1) * 32767 or 65535)`, rounded once from the exact product. A NaN
+  gives 0, and f16 denormals are values.
+- **Destination halves:** norm keeps `D[31:16]`. pknorm writes `S0`'s result to the low half and `S1`'s to the
+  high half. With the destination `op_sel` bit of the f16 forms, `S0`'s result goes to `D[31:16]`, `D[15:0]` is 0
+  and `S1`'s result is dropped (measured on gfx1036, the `v_cvt_pknorm_*_f16` row of [design.md](design.md)).
+
+`tests/test_cvt_diff.py` checks the reference against three things:
+- the 12 `pknorm_f32` near-tie words measured on gfx1036 (`tests/semantic/test_alu_cvt_pknorm_f32.py`);
+- the semantic tests' f16 references, for all 65,536 halves;
+- the flr/rpi reference, on every value that is not a denormal.
+
+**Programs and sources.**
+- Programs follow the `sad_diff.py` shape: seeds in v8..v15 and s4..s7, then family ops writing v8..v11, so later
+  ops read earlier results.
+- Sources are VGPR, SGPR, a hex literal, an integer inline constant, and a float inline constant. A float inline
+  constant is its f16 value in a 16-bit operand.
+- Modifiers:
+  - `neg`/`abs` on every register source of the `_e64`/VOP3 forms;
+  - `op_sel:[a,b,c]` on the f16 pknorm forms: `a` and `b` pick the high half of a register source, `c` is the
+    destination bit above;
+  - the measured no-ops: `clamp`, `mul:2`, `mul:4` and `div:2` on norm, and `clamp` on pknorm of both widths.
+- Every program is encodable on GFX10: at most one literal and two constant-bus reads.
+- `--self-test` pins the forms the translator refuses: an output multiplier on pknorm of either width.
+
+**Stages.**
+1. A sweep of every source kind with every modifier setting (1,948 programs).
+2. An edge grid (4,428 cases, four per program). Inputs are zeros, denormals, ±0.5 and its neighbours, the 1/32767
+   and 1/65535 steps, 2^23 and 2^31 neighbours, the largest finite values, ±inf, and quiet and signalling NaNs. It
+   also takes 144 f32 near ties of `x * 32767` and `x * 65535`, and every f16 in (0, 1] within 1/256 of a tie. That
+   last set holds every f16 input where a binary32 product would round differently.
+3. Random seeded programs.
+
+`--exhaustive-f16` adds every f16 input through the four f16 ops (49,152 programs). The report counts, per op, the
+inputs that were NaN, inf, saturated or within 1/256 of a tie. Every generated form translates, so a skip exits 1
+just as a mismatch does.
+
+```powershell
+python -I tools/cvt_diff.py --programs 2000 --seed 7
+python -I tools/cvt_diff.py --exhaustive-f16 --programs 0 --no-sweep
+python -I tools/cvt_diff.py --self-test
+python -I tests/test_cvt_diff.py
+```
+
+**Results.** Seeds 776521 to 776524 (`--programs 25000 --max-ops 8`) and 776525 to 776528 (`--programs 100000
+--max-ops 8`) match bit for bit, with zero mismatches and zero skips: 4 x 27,239 and 4 x 102,239 programs.
+`--exhaustive-f16` matches 49,152 of 49,152 programs. Those runs predate the generation of the f16 destination
+`op_sel` and of `clamp` on `pknorm_f16`. With both, seeds 776531 to 776534 (`--programs 25000 --max-ops 8`) and
+776535 to 776538 (`--programs 100000 --max-ops 8`) match, 4 x 28,055 and 4 x 103,055 programs with zero mismatches
+and zero skips, and `--exhaustive-f16` matches 49,152 of 49,152 again.
+
+Nine mutations of the translator's lowerings, run with `--programs 300 --seed 2` (failing programs per stage):
+
+| Mutation | Sweep | Grid | Random |
+|---|---|---|---|
+| `rpi` as `Floor(x + 0.5)` in binary32 | 0 | 3 | 3 |
+| `flr`/`rpi` give 0 for a NaN | 2 | 5 | 13 |
+| `norm_f16` rounds the binary32 product | 0 | 8 | 0 |
+| `pknorm_f16` ignores `op_sel` | 381 | 335 | 61 |
+| `pknorm_f32` without the near-tie fix (SHADER-363) | 5 | 24 | 2 |
+| `pknorm_f16` rounds the binary32 product | 16 | 6 | 2 |
+| `norm` zeroes `D[31:16]` | 92 | 456 | 137 |
+| `flr` keeps an f32 denormal (`flr(-1e-45) = -1`) | 0 | 2 | 2 |
+| `pknorm_f32` passes a NaN to `FClamp` | 66 skips | 4 skips | 29 skips |
+
+The grid is the only stage that catches the `norm_f16` and denormal mutations. The last one is a translation the
+interpreter calls undefined, so it shows up as skips; that is why a skip exits 1.
+
+That table predates the generation of the f16 destination `op_sel` and of `clamp` on `pknorm_f16`. With both
+generated, on the same seed and program count, two more mutations of those lowerings:
+
+| Mutation | Sweep | Grid | Random |
+|---|---|---|---|
+| `pknorm_f16` ignores the destination `op_sel` | 676 | 0 | 33 |
+| `pknorm_i16_f16` `clamp` clamps to [0, 1] | 31 | 0 | 11 |
+
 ### `v_mad_f32`, `v_mac_f32`, `v_mad_legacy_f32` denormal flush on RDNA1 (`tools/mad_denorm_probe.py`, SHADER-340)
 
 `docs/design.md` ("Denormal flush in `v_mad_f32`, `v_mac_f32`, `v_mad_legacy_f32`") had no hardware measurement: GFX10.3+

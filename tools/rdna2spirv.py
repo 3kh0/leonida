@@ -6012,6 +6012,23 @@ class Gen:
             self.emit(f"{word} = OpCompositeExtract %uint {pair} {i}")
             self.dst({"k": "vgpr", "r": d["r"] + i, "n": 1}, word)
 
+    def legacy_zero(self, x, y):
+        """The legacy multiply's zero rule after the input flush, as one bool: is |x| or |y| below FLT_MIN?
+
+        flush_f32 turns exactly those operands into ±0, and the legacy rule then gives +0 whatever the other
+        operand is (inf and NaN included). So the flushed operands themselves are never needed: when neither is
+        below FLT_MIN, flushing leaves both unchanged and the product of the unflushed ones is the same. NaN
+        compares false, as the == 0 test on a flushed NaN did. Two compares instead of two flushes and two
+        compares: the flushes made the largest translated compute modules about a fifth larger."""
+        tx, ty, either = self.tmp(), self.tmp(), self.tmp()
+        lim = self.fconst(2.0 ** -126)
+        for t, v in ((tx, x), (ty, y)):
+            a = self.tmp()
+            self.emit(f"{a} = OpExtInst %float %glsl FAbs {v}")
+            self.emit(f"{t} = OpFOrdLessThan %bool {a} {lim}")
+        self.emit(f"{either} = OpLogicalOr %bool {tx} {ty}")
+        return either
+
     def flush_f32_mods(self, v, mods):
         """Flush a subnormal sum before output modifiers and flush again after them (SHADER-340, RDNA1 gfx1010)."""
         v = self.flush_f32(v)
@@ -9013,14 +9030,13 @@ class Gen:
             # The inferred game's f32 denorm mode is flush-in/flush-out. Unlike an IEEE multiply, the legacy
             # zero override gives +0 even when a negative subnormal operand becomes -0 after input flushing.
             # Flush the product before omod: otherwise FLT_MIN * 0.5 mul:2 becomes FLT_MIN, not zero.
-            x, y = (self.flush_f32(self.src_f(t)) for t in a[1:3])
-            m, zx, zy, either, r = (self.tmp() for _ in range(5))
+            m, r = self.tmp(), self.tmp()
+            x, y = (self.src_f(t) for t in a[1:3])
             self.emit(f"{m} = OpFMul %float {x} {y}")
-            self.emit(f"{zx} = OpFOrdEqual %bool {x} %f0")
-            self.emit(f"{zy} = OpFOrdEqual %bool {y} %f0")
-            self.emit(f"{either} = OpLogicalOr %bool {zx} {zy}")
-            self.emit(f"{r} = OpSelect %float {either} %f0 {self.flush_f32(m)}")
-            r = self.flush_f32(self.clamp_mods(r, mods))
+            self.emit(f"{r} = OpSelect %float {self.legacy_zero(x, y)} %f0 {self.flush_f32(m)}")
+            r = self.clamp_mods(r, mods)
+            if "div:2" in mods:
+                r = self.flush_f32(r)       # the one omod that can make a normal value subnormal
             if any(mod in ("mul:2", "mul:4", "div:2") for mod in mods):
                 # With IEEE off, omod makes -0 (including a flushed subnormal result) +0.
                 z, pos = self.tmp(), self.tmp()
@@ -9033,13 +9049,11 @@ class Gen:
             # v_mac_legacy_f32 is the GFX10.1 VOP2 form with D as the addend, as v_mac_f32 is to v_mad_f32 (LLVM
             # VOP2Instructions.td: V_MAC_LEGACY_F32 is VOP_F32_F32_F32 with $src2 tied to $vdst).
             srcs = (a[1], a[2], a[0]) if op == "v_mac_legacy_f32" else a[1:4]
-            x, y, z = (self.flush_f32(self.src_f(t)) for t in srcs)
-            m, zx, zy, either, sel, r = (self.tmp() for _ in range(6))
+            x, y = (self.src_f(t) for t in srcs[:2])
+            z = self.flush_f32(self.src_f(srcs[2]))
+            m, sel, r = (self.tmp() for _ in range(3))
             self.emit(f"{m} = OpFMul %float {x} {y}")
-            self.emit(f"{zx} = OpFOrdEqual %bool {x} %f0")
-            self.emit(f"{zy} = OpFOrdEqual %bool {y} %f0")
-            self.emit(f"{either} = OpLogicalOr %bool {zx} {zy}")
-            self.emit(f"{sel} = OpSelect %float {either} %f0 {self.flush_f32(m)}")
+            self.emit(f"{sel} = OpSelect %float {self.legacy_zero(x, y)} %f0 {self.flush_f32(m)}")
             self.emit(f"{r} = OpFAdd %float {sel} {z}")
             self.dst(a[0], self.tou(self.flush_f32_mods(r, mods)))
         elif op in ("v_min3_i32", "v_min3_u32", "v_max3_i32", "v_max3_u32"):

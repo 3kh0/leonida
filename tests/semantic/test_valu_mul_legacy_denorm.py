@@ -74,8 +74,15 @@ class LegacyMulDenormalTests(unittest.TestCase):
 
     def test_emits_explicit_f32_flushes_instead_of_a_driver_mode(self):
         _, spv = run_mul(0x00800000, 0x3F000000, "mul:2")
-        # One check for each input, plus the product and final result.
-        self.assertGreaterEqual(spv.count("OpFOrdLessThan %bool"), 4)
+        # One check for each input (|x| < FLT_MIN gives the legacy zero) and one for the product. mul:2 and mul:4
+        # can't make a normal value subnormal, so they add none; div:2 adds the final one. One select each: the legacy
+        # zero, the product flush, and the output modifier (plus div:2's flush). Exact counts: flushing both operands
+        # first, as before SHADER-771, costs 4 compares and 6 selects for every one of these, and fails here.
+        self.assertEqual(spv.count("OpFOrdLessThan %bool"), 3)
+        self.assertEqual(spv.count("OpSelect %float"), 3)
+        _, spv = run_mul(0x00800000, 0x3F000000, "div:2")
+        self.assertEqual(spv.count("OpFOrdLessThan %bool"), 4)
+        self.assertEqual(spv.count("OpSelect %float"), 4)
         self.assertIn("OpFMul %float", spv)
         self.assertIn("OpSelect %float", spv)
         # The software rule does not demand a vendor-specific float control.

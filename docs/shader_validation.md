@@ -1421,6 +1421,17 @@ test `test_valu_mul_legacy_denorm.py` checks the exact bit patterns and the two 
 output scaling. This is a translation for the **inferred game MODE**, not a claim of correctly handling dynamic
 denormal-preserving or IEEE modes; native gfx1013 measurements of these new fixtures were not available.
 
+*Cost (SHADER-771).* Flushing both operands made the flush the largest part of every legacy multiply, and the
+largest translated compute modules grew by about a fifth. The operands' flushed values are never needed: a flushed
+operand is ±0 exactly when its magnitude is below `FLT_MIN`, and then the legacy rule gives +0 whatever the other
+operand is. So `Gen.legacy_zero` tests `|x| < FLT_MIN || |y| < FLT_MIN` on the unflushed operands, and the product is
+taken from them (they are unchanged by the flush when neither test is true). `v_mad_legacy_f32` and
+`v_mac_legacy_f32` do the same for their product, and their addend is still flushed. The result after the modifiers is
+flushed again only for `div:2`, the one omod that can make a normal value subnormal. `test_valu_legacy_mul_matrix.py`
+checks both instructions against a reference model over every pair of 14 special values with each modifier set; it
+passes with the translator before and after this change. On the 20 largest modules of the 1.0.2.1 corpus, the 9 that
+grew with the flush are 11.4% smaller again (224 to 214 MiB for the 20).
+
 
 ### f16 transcendentals on the hardware (`tools/f16_trans_sweep.py`, FUZZ-29)
 

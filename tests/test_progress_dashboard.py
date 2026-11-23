@@ -185,6 +185,55 @@ class Github(unittest.TestCase):
 
 
 class Corpus(unittest.TestCase):
+    def collect(self, carved, translated):
+        with tempfile.TemporaryDirectory() as work:
+            for folder, index in (("dxbc", carved), ("spirv", translated)):
+                path = os.path.join(work, "shaders", folder)
+                os.makedirs(path)
+                with open(os.path.join(path, "index.json"), "w", encoding="utf-8", newline="\n") as f:
+                    json.dump(index, f)
+            col = pd.Collector()
+            pd.collect_corpus(col, work)
+            return col
+
+    def test_stale_translation_cannot_exceed_the_current_corpus(self):
+        col = self.collect([{"name": SENTINEL, "file": SENTINEL + ".dxbc", "stage": "cs"}],
+                           {SENTINEL: {"stage": "cs"}, SENTINEL + "_stale": {"stage": "cs"}})
+        m = next(m for m in col.metrics if m["id"] == "corpus.validated")
+        self.assertEqual((m["numerator"], m["denominator"], m["value"]), (1, 1, 1.0))
+        self.assertEqual([(c["group"], c["status"], c["count"]) for c in col.components],
+                         [("cs", "implemented", 1)])
+
+    def test_mapping_style_carve_uses_its_key_if_filename_is_missing(self):
+        col = self.collect({SENTINEL + ".dxbc": {"stage": "cs"}, SENTINEL + "_pending": {"stage": "ps"}},
+                           {SENTINEL: {"stage": "cs"}, SENTINEL + "_stale": {"stage": "ps"}})
+        self.assertEqual({(c["group"], c["status"]): c["count"] for c in col.components},
+                         {("cs", "implemented"): 1, ("ps", "failed"): 1})
+
+    def test_join_uses_unique_carved_filename_not_archive_name_or_only_stage(self):
+        # Two archive entries share a display name. The carver gives them distinct filenames.
+        carved = [{"name": SENTINEL, "file": SENTINEL + ".dxbc", "stage": "cs"},
+                  {"name": SENTINEL, "file": SENTINEL + "~1.dxbc", "stage": "cs"},
+                  {"name": SENTINEL + ":alias", "file": SENTINEL + "_alias.dxbc", "stage": "ps"},
+                  {"name": SENTINEL + "_mismatch", "file": SENTINEL + "_mismatch.dxbc", "stage": "ps"},
+                  {"name": SENTINEL + "_error", "file": SENTINEL + "_error.dxbc", "stage": "cs"},
+                  {"name": SENTINEL + "_pending", "file": SENTINEL + "_pending.dxbc", "stage": "vs"}]
+        translated = {SENTINEL: {"stage": "cs"}, SENTINEL + "~1": {"stage": "cs"},
+                      SENTINEL + "_alias": {"stage": "ps"}, SENTINEL + ":alias": {"stage": "ps"},
+                      SENTINEL + "_mismatch": {"stage": "gs"},
+                      SENTINEL + "_error": {"stage": "cs", "error": "translation failed"}}
+        col = self.collect(carved, translated)
+        self.assertEqual({(c["group"], c["status"]): c["count"] for c in col.components},
+                         {("cs", "implemented"): 2, ("cs", "failed"): 1,
+                          ("ps", "implemented"): 1, ("ps", "failed"): 1, ("vs", "failed"): 1})
+        m = next(m for m in col.metrics if m["id"] == "corpus.validated")
+        self.assertEqual((m["numerator"], m["denominator"]), (3, 6))
+        self.assertEqual(sum(c["count"] for c in col.components), len(carved))
+        source = next(s for s in col.sources if s["id"] == "corpus_spirv")
+        self.assertIn("translated entries absent from the carve: 1", source["note"])
+        self.assertIn("stage mismatches: 1", source["note"])
+        self.assertNotIn(SENTINEL, json.dumps(vars(col), default=str))
+
     def test_counts_only_never_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             work = os.path.join(tmp, "work")

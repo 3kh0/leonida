@@ -115,7 +115,9 @@ Your game folder is the one that holds `MicrosoftGame.Config` and the `.rpf` arc
   in WSL and set `LLVM_MC` to the whole command, `LLVM_MC="wsl -d Ubuntu -e /usr/lib/llvm-21/bin/llvm-mc"` (see
   [docs/design.md](docs/design.md#disassembling-shaders)). On Linux, `llvm-mc` on PATH is enough.
 - Visual Studio 2022 with **Desktop development with C++** and the **Windows SDK 10.0.26100 or newer**, for the
-  runtime stage (the runtime uses version 1.2 root signatures, which older SDKs don't declare).
+  runtime stage (the runtime uses version 1.2 root signatures, which older SDKs don't declare). Visual Studio 2026
+  (MSVC 14.51) works too; its linker crashed (LNK1000) on two CRT-less test fixtures until they were linked
+  with `/INCREMENTAL:NO` (BUILD-1550), so an older checkout needs Visual Studio 2022.
 - [ffmpeg](https://ffmpeg.org/download.html) on PATH (optional: decodes the XMA2 streams, and required for `--wav`).
 
 **Is this PC strong enough?** `python -I tools/pc_checker.py --cli` detects the CPU, GPU and RAM and compares them

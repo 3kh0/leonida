@@ -713,7 +713,9 @@ if(BUILD_TESTING)
     # DllMain's only work is that one call. No game files.
     add_library(dll_thread_calls SHARED test/fixtures/dll_thread_calls.cpp)
     target_compile_options(dll_thread_calls PRIVATE /W4 /permissive- /utf-8 /GS-)
-    target_link_options(dll_thread_calls PRIVATE /NODEFAULTLIB /ENTRY:dll_thread_calls_main)
+    # /INCREMENTAL:NO: VS 2026's link.exe (MSVC 14.51) crashes with LNK1000 (IncrCalcPtrs) linking this CRT-less DLL
+    # incrementally (BUILD-1550).
+    target_link_options(dll_thread_calls PRIVATE /NODEFAULTLIB /ENTRY:dll_thread_calls_main /INCREMENTAL:NO)
     target_link_libraries(dll_thread_calls PRIVATE kernel32)
     set_target_properties(dll_thread_calls PROPERTIES
       OUTPUT_NAME dll_thread_calls
@@ -748,7 +750,8 @@ if(BUILD_TESTING)
     if(GAMEINPUT_LIBRARY)
       add_library(gameinput_host SHARED test/fixtures/gameinput_host.cpp)
       target_compile_options(gameinput_host PRIVATE /W4 /permissive- /utf-8 /GS-)
-      target_link_options(gameinput_host PRIVATE /NODEFAULTLIB /ENTRY:gameinput_host_main)
+      # /INCREMENTAL:NO for VS 2026's link.exe, as for dll_thread_calls above (BUILD-1550).
+      target_link_options(gameinput_host PRIVATE /NODEFAULTLIB /ENTRY:gameinput_host_main /INCREMENTAL:NO)
       target_link_libraries(gameinput_host PRIVATE kernel32 ${GAMEINPUT_LIBRARY})
       set_target_properties(gameinput_host PROPERTIES
         OUTPUT_NAME gameinput_host

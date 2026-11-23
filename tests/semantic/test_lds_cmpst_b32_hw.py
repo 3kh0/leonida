@@ -217,6 +217,77 @@ class TestSymbolicAST(unittest.TestCase):
                 vdst=None,
             )
 
+class LDSState:
+    def __init__(self, size_dwords: int = 1024):
+        self.size_dwords = size_dwords
+        self.data = [0] * size_dwords
+
+    def atomic_cmpst_b32(self, byte_addr: int, cmp_val: int, swap_val: int) -> int:
+        idx = ((byte_addr & MASK32) >> 2) & (self.size_dwords - 1)
+        new_val, old_val = ref_cmpst_b32(self.data[idx], cmp_val, swap_val)
+        self.data[idx] = new_val
+        return old_val
+
+
+class ScalarRegisterState:
+    def __init__(self):
+        self.vgprs = [0] * 256
+        self.scc = 0
+        self.vcc = 0
+
+
+class ScalarLDSInterpreter:
+    def __init__(self, lds: Optional[LDSState] = None, regs: Optional[ScalarRegisterState] = None):
+        self.lds = lds if lds is not None else LDSState()
+        self.regs = regs if regs is not None else ScalarRegisterState()
+
+    def step(self, insn: DSCmpStB32Instruction) -> int:
+        base_addr = self.regs.vgprs[insn.vaddr.index]
+        eff_addr = (base_addr + insn.offset) & MASK32
+        cmp_val = self.regs.vgprs[insn.vcmp.index]
+        swap_val = self.regs.vgprs[insn.vsrc.index]
+        old = self.lds.atomic_cmpst_b32(eff_addr, cmp_val, swap_val)
+        if insn.rtn and insn.vdst is not None:
+            self.regs.vgprs[insn.vdst.index] = old
+        return old
+
+
+class TestScalarInterpreter(unittest.TestCase):
+    def test_scalar_interpreter_step_and_chaining(self):
+        interp = ScalarLDSInterpreter()
+        interp.lds.data[0] = 0xAAAAAAAA
+
+        interp.regs.vgprs[0] = 0  # addr
+        interp.regs.vgprs[1] = 0xAAAAAAAA  # cmp
+        interp.regs.vgprs[2] = 0xBBBBBBBB  # swap
+        interp.regs.vgprs[4] = 0xCCCCCCCC  # second swap
+
+        # Step 1: ds_cmpst_rtn_b32 v3, v0, v1, v2 -> match, writes BBBBBBBB, returns AAAAAAAA
+        insn1 = DSCmpStB32Instruction(
+            vaddr=Operand.vgpr(0),
+            vcmp=Operand.vgpr(1),
+            vsrc=Operand.vgpr(2),
+            rtn=True,
+            vdst=Operand.vgpr(3),
+        )
+        old1 = interp.step(insn1)
+        self.assertEqual(old1, 0xAAAAAAAA)
+        self.assertEqual(interp.regs.vgprs[3], 0xAAAAAAAA)
+        self.assertEqual(interp.lds.data[0], 0xBBBBBBBB)
+
+        # Step 2: ds_cmpst_rtn_b32 v5, v0, v2, v4 -> match, writes CCCCCCCC, returns BBBBBBBB
+        insn2 = DSCmpStB32Instruction(
+            vaddr=Operand.vgpr(0),
+            vcmp=Operand.vgpr(2),
+            vsrc=Operand.vgpr(4),
+            rtn=True,
+            vdst=Operand.vgpr(5),
+        )
+        old2 = interp.step(insn2)
+        self.assertEqual(old2, 0xBBBBBBBB)
+        self.assertEqual(interp.regs.vgprs[5], 0xBBBBBBBB)
+        self.assertEqual(interp.lds.data[0], 0xCCCCCCCC)
+
 
 if __name__ == "__main__":
     unittest.main()

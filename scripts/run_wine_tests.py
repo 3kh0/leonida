@@ -30,6 +30,8 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# "wine: Unhandled page fault ... starting debugger..." and "wine: Unimplemented function ... starting debugger...".
+ABORTED = re.compile(r"^wine: .*starting debugger\.\.\.", re.MULTILINE)
 
 
 def _make_parent(path: str) -> None:
@@ -106,12 +108,17 @@ class WineDebugger:
     started for an unhandled exception, such as a call to a function this Wine does not implement ("Unimplemented
     function KERNEL32.dll.CopyFile2 ... starting debugger..."). Under Xvfb it never ends, so the test sat until
     --timeout (120 s each). With Debugger set to "false" the process dies in under a second with a non-zero exit code,
-    which is the same failure, only quick. The old value is put back afterwards. Nothing is done for a missing
-    prefix, with keep=True, or when the prefix names a debugger other than winedbg. A failing "wine reg" only leaves
-    the old behaviour (and a note); it never fails the run.
+    which run_test reports as the failure it was (see ABORTED). The old value is put back afterwards.
+
+    The value is only touched when it is exactly the REG_SZ default (DEFAULT_DEBUGGER), or when the query shows it is
+    absent. Anything else (another command, an empty or REG_EXPAND_SZ value, a query that failed for another reason,
+    a missing prefix, keep=True) is left alone, and so is a test whose CTest ENVIRONMENT sets its own WINEPREFIX. A
+    failing "wine reg" never fails the run: a restore that fails is tried twice, then reported with the command that
+    restores it by hand. A run killed with SIGKILL cannot restore it, and two runs on one prefix must not overlap.
     """
 
     KEY = r"HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug"
+    DEFAULT_DEBUGGER = "winedbg --auto %ld %ld"
 
     def __init__(self, wine: list[str], prefix: str, keep: bool = False):
         self.wine, self.prefix, self.keep = list(wine), prefix, keep
@@ -126,6 +133,10 @@ class WineDebugger:
             return None
         return proc.returncode, proc.stdout.decode("utf-8", "replace")
 
+    def _set(self, value: str) -> bool:
+        result = self._reg("add", self.KEY, "/v", "Debugger", "/t", "REG_SZ", "/d", value, "/f")
+        return result is not None and result[0] == 0
+
     def __enter__(self):
         if self.keep or not os.path.isdir(os.path.join(self.prefix, "dosdevices")):
             return self
@@ -133,14 +144,18 @@ class WineDebugger:
         if query is None:
             self.note = "wine reg did not run: the crash debugger is left as it is"
             return self
-        m = re.search(r"^\s*Debugger\s+REG_SZ\s*(.*?)\s*$", query[1], re.MULTILINE) if query[0] == 0 else None
-        self.previous = m.group(1) if m else None
-        if self.previous and "winedbg" not in self.previous:
-            self.note = f"the prefix uses its own crash debugger ({self.previous}): left as it is"
-            self.previous = None
+        code, out = query
+        found = re.search(r"^\s*Debugger\s+(REG_\w+)(?:\s+(.*?))?\s*$", out, re.MULTILINE)
+        if code == 0 and found:
+            kind, data = found.group(1), found.group(2) or ""
+            if (kind, data) != ("REG_SZ", self.DEFAULT_DEBUGGER):
+                self.note = f"the prefix has its own crash debugger setting ({kind} {data!r}): left as it is"
+                return self
+            self.previous = data
+        elif code == 0 or "unable to find" not in out.lower():
+            self.note = "could not read the crash debugger setting: left as it is"
             return self
-        added = self._reg("add", self.KEY, "/v", "Debugger", "/t", "REG_SZ", "/d", "false", "/f")
-        if added is None or added[0] != 0:
+        if not self._set("false"):
             self.note = "could not set the crash debugger: a crashing test waits for winedbg"
             return self
         self.active = True
@@ -148,11 +163,21 @@ class WineDebugger:
         return self
 
     def __exit__(self, *exc):
-        if self.active:
-            if self.previous:
-                self._reg("add", self.KEY, "/v", "Debugger", "/t", "REG_SZ", "/d", self.previous, "/f")
+        if not self.active:
+            return False
+        for _ in range(2):
+            if self.previous is not None:
+                restored = self._set(self.previous)
             else:
-                self._reg("delete", self.KEY, "/v", "Debugger", "/f")
+                result = self._reg("delete", self.KEY, "/v", "Debugger", "/f")
+                restored = result is not None and result[0] == 0
+            if restored:
+                return False
+        by_hand = (f'WINEPREFIX="{self.prefix}" wine reg add "{self.KEY}" /v Debugger /t REG_SZ /d "{self.previous}" /f'
+                   if self.previous is not None else
+                   f'WINEPREFIX="{self.prefix}" wine reg delete "{self.KEY}" /v Debugger /f')
+        print(f"WARNING: could not restore Wine's crash debugger in {self.prefix}; it is still 'false'. "
+              f"Restore it with: {by_hand}", file=sys.stderr, flush=True)
         return False
 
 
@@ -234,6 +259,10 @@ def run_test(test: dict, args, wine: list[str]) -> tuple[str, str]:
         # A negative return code is a host-signal termination (e.g. SIGSEGV), not a process exit code:
         # report it as a failure before SKIP_RETURN_CODE or WILL_FAIL can reinterpret it.
         return "fail", f"killed by signal {-code} in {elapsed:.1f} s\n{out}"
+    if ABORTED.search(out):
+        # Wine's own report of an unhandled exception. Before WineDebugger the crash debugger kept such a process
+        # alive until the timeout, which is a failure whatever WILL_FAIL, the exit code or an output expression say.
+        return "fail", f"aborted by Wine (exit {code} in {elapsed:.1f} s)\n{out}"
     skip_code = props.get("SKIP_RETURN_CODE")
     if skip_code is not None and code == int(skip_code):
         return "skip", f"exit {code} (skip) in {elapsed:.1f} s\n{out}"

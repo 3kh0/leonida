@@ -368,6 +368,7 @@ class DriveMapTest(unittest.TestCase):
 class WineDebuggerTest(unittest.TestCase):
     """The crash debugger is switched off for the run and put back after it, through a stand-in for `wine reg`."""
 
+    DEFAULT = "winedbg --auto %ld %ld"
     FAKE_WINE = (
         "import json, sys\n"
         "state_path, args = sys.argv[1], sys.argv[3:]\n"
@@ -375,13 +376,21 @@ class WineDebuggerTest(unittest.TestCase):
         "state['calls'].append(args)\n"
         "code = 0\n"
         "if args[0] == 'query':\n"
-        "    if state['debugger'] is None:\n"
+        "    if state.get('query_error'):\n"
+        "        print(state['query_error'])\n"
+        "        code = 1\n"
+        "    elif state['debugger'] is None:\n"
+        "        print('reg: Error: The system was unable to find the specified registry key or value.')\n"
         "        code = 1\n"
         "    else:\n"
         "        print('HKEY_LOCAL_MACHINE\\\\Software\\\\AeDebug')\n"
-        "        print('    Debugger    REG_SZ    ' + state['debugger'])\n"
+        "        print('    Debugger    ' + state['type'] + '    ' + state['debugger'])\n"
         "elif args[0] == 'add':\n"
-        "    state['debugger'] = args[args.index('/d') + 1]\n"
+        "    adds = sum(1 for c in state['calls'] if c[0] == 'add')\n"
+        "    if adds > state.get('adds_that_work', 99):\n"
+        "        code = 1\n"
+        "    else:\n"
+        "        state['debugger'], state['type'] = args[args.index('/d') + 1], 'REG_SZ'\n"
         "elif args[0] == 'delete':\n"
         "    state['debugger'] = None\n"
         "json.dump(state, open(state_path, 'w'))\n"
@@ -401,43 +410,135 @@ class WineDebuggerTest(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def set_debugger(self, value):
-        self.state.write_text(json.dumps({"debugger": value, "calls": []}), encoding="utf-8")
+    def set_debugger(self, value, kind="REG_SZ", **extra):
+        self.state.write_text(json.dumps({"debugger": value, "type": kind, "calls": [], **extra}), encoding="utf-8")
 
     def read(self):
         return json.loads(self.state.read_text(encoding="utf-8"))
 
+    def enter(self):
+        return rwt.WineDebugger(self.wine, str(self.prefix))
+
     def test_the_debugger_is_off_during_the_run_and_restored_after(self):
-        self.set_debugger("winedbg --auto %ld %ld")
-        with rwt.WineDebugger(self.wine, str(self.prefix)) as dbg:
+        self.set_debugger(self.DEFAULT)
+        with self.enter() as dbg:
             self.assertEqual(self.read()["debugger"], "false")
             self.assertIn("crash debugger is off", dbg.note)
-        self.assertEqual(self.read()["debugger"], "winedbg --auto %ld %ld")
+        self.assertEqual(self.read()["debugger"], self.DEFAULT)
 
-    def test_a_prefix_without_the_value_gets_it_removed_again(self):
+    def test_a_value_the_query_proves_absent_is_removed_again(self):
         self.set_debugger(None)
-        with rwt.WineDebugger(self.wine, str(self.prefix)):
+        with self.enter():
             self.assertEqual(self.read()["debugger"], "false")
         self.assertIsNone(self.read()["debugger"])
 
-    def test_a_debugger_the_user_set_is_left_alone(self):
-        self.set_debugger("gdb --pid %ld")
-        with rwt.WineDebugger(self.wine, str(self.prefix)) as dbg:
-            self.assertEqual(self.read()["debugger"], "gdb --pid %ld")
-            self.assertIn("its own crash debugger", dbg.note)
-        self.assertEqual(self.read()["debugger"], "gdb --pid %ld")
+    def test_any_other_value_is_left_alone(self):
+        cases = {
+            "another command": ("gdb --pid %ld", "REG_SZ"),
+            "a wrapper around winedbg": ("/opt/my-winedbg-wrapper --auto %ld %ld", "REG_SZ"),
+            "an expandable string": ("%WINDIR%\\winedbg --auto %ld %ld", "REG_EXPAND_SZ"),
+            "the default text in the wrong type": (self.DEFAULT, "REG_EXPAND_SZ"),
+        }
+        for label, (value, kind) in cases.items():
+            with self.subTest(label):
+                self.set_debugger(value, kind)
+                with self.enter() as dbg:
+                    self.assertEqual(self.read()["debugger"], value)
+                    self.assertIn("left as it is", dbg.note)
+                self.assertEqual(self.read()["debugger"], value)
+                self.assertEqual([c[0] for c in self.read()["calls"]], ["query"])
+
+    def test_an_empty_value_is_left_alone(self):
+        self.set_debugger("", "REG_SZ")
+        with self.enter():
+            self.assertEqual(self.read()["debugger"], "")
+        self.assertEqual(self.read()["debugger"], "")
+
+    def test_a_query_that_failed_for_another_reason_changes_nothing(self):
+        self.set_debugger(self.DEFAULT, query_error="reg: Error: Access is denied.")
+        with self.enter():
+            self.assertEqual(self.read()["debugger"], self.DEFAULT)
+        self.assertEqual([c[0] for c in self.read()["calls"]], ["query"])
 
     def test_keep_and_a_missing_prefix_change_nothing(self):
-        self.set_debugger("winedbg --auto %ld %ld")
+        self.set_debugger(self.DEFAULT)
         with rwt.WineDebugger(self.wine, str(self.prefix), keep=True):
             pass
         with rwt.WineDebugger(self.wine, str(self.prefix / "missing")):
             pass
-        self.assertEqual(self.read(), {"debugger": "winedbg --auto %ld %ld", "calls": []})
+        self.assertEqual(self.read()["calls"], [])
 
     def test_an_unstartable_wine_does_not_stop_the_run(self):
         with rwt.WineDebugger(["/nonexistent/wine"], str(self.prefix)) as dbg:
             self.assertIn("left as it is", dbg.note)
+
+    def test_a_failed_restore_is_tried_again_and_then_reported(self):
+        err = io.StringIO()
+        self.set_debugger(self.DEFAULT, adds_that_work=1)         # only the "false" add works: both restores fail
+        with contextlib.redirect_stderr(err):
+            with self.enter():
+                pass
+        adds = [c for c in self.read()["calls"] if c[0] == "add"]
+        self.assertEqual(len(adds), 3)                            # false, restore, one retry
+        self.assertEqual(self.read()["debugger"], "false")
+        self.assertIn(str(self.prefix), err.getvalue())
+        self.assertIn("reg add", err.getvalue())
+        self.assertIn(self.DEFAULT, err.getvalue())
+
+    def test_a_restore_that_works_on_the_second_try_is_quiet(self):
+        self.set_debugger(self.DEFAULT)
+        err = io.StringIO()
+        real = self.enter()
+        calls = []
+        original = real._reg
+
+        def flaky(*argv):
+            calls.append(argv[0])
+            if argv[0] == "add" and calls.count("add") == 2:        # the first restore fails
+                return None
+            return original(*argv)
+
+        real._reg = flaky
+        with contextlib.redirect_stderr(err):
+            with real:
+                pass
+        self.assertEqual(self.read()["debugger"], self.DEFAULT)
+        self.assertEqual(err.getvalue(), "")
+
+
+class AbortedTestTest(unittest.TestCase):
+    """A process Wine aborts stays a failure, however CTest would read its exit code or output."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        (self.root / "artifact").mkdir()
+        self.args = argparse.Namespace(windows_root=WINDOWS_ROOT, root=str(self.root), timeout=10.0)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def aborting(self, code=1, before=""):
+        path = self.root / "artifact" / "abort.py"
+        path.write_text("import sys\n" + (f"print({before!r})\n" if before else "") +
+                        "print('wine: Unimplemented function KERNEL32.dll.CopyFile2 called at address 0x1 (thread 1), "
+                        f"starting debugger...')\nsys.exit({code})\n", encoding="utf-8")
+        return [WINDOWS_ROOT + "/artifact/abort.py"]
+
+    def run_entry(self, entry):
+        return rwt.run_test(entry, self.args, [sys.executable])
+
+    def test_an_abort_fails_even_when_the_test_is_expected_to_fail(self):
+        status, detail = self.run_entry(ctest_entry("will_fail", self.aborting(), {"WILL_FAIL": "1"}))
+        self.assertEqual(status, "fail")
+        self.assertIn("aborted by Wine", detail)
+
+    def test_an_abort_fails_even_when_the_required_output_was_already_printed(self):
+        entry = ctest_entry("printed", self.aborting(before="ALL OK"), {"PASS_REGULAR_EXPRESSION": "ALL OK"})
+        self.assertEqual(self.run_entry(entry)[0], "fail")
+
+    def test_an_abort_with_a_zero_exit_code_still_fails(self):
+        self.assertEqual(self.run_entry(ctest_entry("zero", self.aborting(code=0)))[0], "fail")
 
 
 class MainTest(unittest.TestCase):

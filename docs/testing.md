@@ -174,6 +174,12 @@ Vulkan instance with, so every Vulkan test fails with `vkCreateInstance failed (
 as CI does: `WINEPREFIX="$HOME/.local/share/leonida-wine" xvfb-run -a ctest --test-dir runtime/build/windows`
 (packages `xvfb` and `xauth`, which `xvfb-run` needs). With Mesa installed, the tests then run on llvmpipe.
 
+`scripts/run_wine_tests.py` (what CI uses) turns Wine's crash debugger off in the prefix for the run, so a test that Wine
+aborts fails at once instead of waiting for `winedbg` until the timeout, and puts the setting back afterwards. A run
+that is killed with SIGKILL cannot put it back and leaves `Debugger` set to `false`; restore it with
+`WINEPREFIX=<prefix> wine reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug" /v Debugger /t REG_SZ /d "winedbg --auto %ld %ld" /f`.
+Do not run two of them on one prefix at the same time, and give `--keep-wine-debugger` if you want `winedbg`'s backtrace.
+
 The build type defaults to `RelWithDebInfo`: xwin leaves out the debug CRT, so `Debug` needs `--include-debug-libs`.
 `make_game.py`'s `runtime` stage makes this same build on Linux when the tools and the SDK are there (`--runtime-build
 runtime/build/windows` takes a folder made by hand like a Windows build). CMake packages are

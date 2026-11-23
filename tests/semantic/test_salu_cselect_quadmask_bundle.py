@@ -235,6 +235,35 @@ class TestSQuadmaskB32Reference(unittest.TestCase):
         self.assertEqual(res, 0xFF)
         self.assertEqual(scc, 1)
 
+@SaluInterpreterState.register("s_quadmask_b32")
+def _step_quadmask_b32(state: SaluInterpreterState, inst: SaluInstruction) -> tuple[int, int]:
+    s0_val = inst.s0 if not isinstance(inst.s0, str) else state.sgpr[int(inst.s0.lstrip("s"))]
+    res, scc = ref_s_quadmask_b32(s0_val)
+    state.sgpr[inst.dst] = res
+    state.scc = scc
+    return res, scc
+
+
+class TestSQuadmaskB32Interpreter(unittest.TestCase):
+    def test_interpreter_step_nonzero(self):
+        state = SaluInterpreterState()
+        inst = SaluInstruction("s_quadmask_b32", dst=0, s0=0x01020408)
+        res, scc = state.step(inst)
+        self.assertEqual(res, 0x55)
+        self.assertEqual(scc, 1)
+        self.assertEqual(state.sgpr[0], 0x55)
+        self.assertEqual(state.scc, 1)
+
+    def test_interpreter_step_zero(self):
+        state = SaluInterpreterState()
+        state.scc = 1
+        inst = SaluInstruction("s_quadmask_b32", dst=0, s0=0)
+        res, scc = state.step(inst)
+        self.assertEqual(res, 0)
+        self.assertEqual(scc, 0)
+        self.assertEqual(state.sgpr[0], 0)
+        self.assertEqual(state.scc, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

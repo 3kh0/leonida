@@ -63,7 +63,7 @@ def select_candidates(index, disasm_dir, spirv_dir, count=150, loops="none", nam
     if count < 1:       # the check below runs after the first append, so 0 or less still picked one shader
         raise ValueError("count must be at least 1")
     if names_file:
-        with open(names_file, encoding="utf-8") as f:
+        with open(names_file, encoding="utf-8-sig") as f:   # a BOM (PowerShell 5.1) would stick to the first name
             return [name for name in f.read().split("\n") if name]
 
     picked = []

@@ -439,6 +439,12 @@ class ParentPathInheritanceTest(unittest.TestCase):
         self.assertEqual(s["chain_depths"], {"1": 2, "2": 1})  # mid and dq -> base, leaf -> mid -> base
         self.assertEqual(s["cycles"], 2)                   # loopa and loopb each walk back to themselves
 
+    def test_shared_tails_and_paths_entering_a_cycle(self):
+        links = [(0, 1), (1, 2), (3, 1), (4, 5), (5, 6), (6, 5), (7, 4)]
+        for order in (links, links[::-1]):
+            with self.subTest(order=order):
+                self.assertEqual(gg.parent_chains(order), ({1: 1, 2: 2}, 4))
+
     def test_existing_counts_are_unchanged(self):
         s = self.graph(INHERIT)["summary"]
         self.assertEqual(s["references"], {"parentPath": 9})

@@ -98,6 +98,9 @@ and 4 for 1, with no cycles. So these are in-document references that a loader c
 path, by key lookup within the parent list. The 3 `parentFile` sites are all in `CEnergyConfigInfos` and name
 the same other file.
 
+The depth histogram counts linked children with a finite path to a root. A child whose path enters a cycle
+counts toward `cycles`, not the histogram; two children leading into the same cycle count separately.
+
 ## Unresolved references
 
 | Bucket | Sites | Note |

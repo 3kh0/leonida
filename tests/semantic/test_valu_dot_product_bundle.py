@@ -245,5 +245,32 @@ class VDot2cF32F16SimdBoundaryTests(unittest.TestCase):
             expected = 1.0 * float(i) + 2.0 * 1.0 + float(i)
             self.assertAlmostEqual(bits_to_f32(out[i]), expected)
 
+class VDot2cF32F16TranslatorIntegrationTests(unittest.TestCase):
+    """Translator execution and negative mutation controls for v_dot2c_f32_f16."""
+
+    def test_spirv_translation_execution(self):
+        lines = [
+            "v_mov_b32 v0, 0x3C003C00",  # (1.0, 1.0)
+            "v_mov_b32 v1, 0x3C003C00",  # (1.0, 1.0)
+            "v_mov_b32 v3, 0x40000000",  # 2.0f
+            "v_dot2c_f32_f16 v3, v0, v1",
+            "v_mov_b32 v0, v3",
+            "v_mov_b32 v1, 0",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+            "exp mrt0 v0, v1, v2, v3 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_dot2c_f32_bundle_int", lines)
+        out = mrt0_words(spv)
+        self.assertAlmostEqual(bits_to_f32(out[0]), 4.0)
+
+    def test_negative_mutation_contrast(self):
+        s0 = pack_f16x2(1.0, 1.0)
+        s1 = pack_f16x2(2.0, 2.0)
+        res_accum = ref_dot2_f32_f16(s0, s1, f32_to_bits(10.0))
+        res_no_accum = ref_dot2_f32_f16(s0, s1, 0)
+        self.assertNotEqual(res_accum, res_no_accum)
+
 if __name__ == "__main__":
     unittest.main()

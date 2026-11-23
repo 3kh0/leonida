@@ -304,5 +304,19 @@ class VFrexpMantF16ScalarInterpreterTests(unittest.TestCase):
         res = oracle_frexp_mant_f16(f16_to_u16(6.0))
         self.assertEqual(res, 0x3A00)
 
+class VFrexpMantF16SimdDivergenceTests(unittest.TestCase):
+    def test_frexp_mant_simd_exec_masking(self):
+        wave = WavefrontSimdState(lane_count=32)
+        wave.exec_mask = 0xF0F0F0F0
+        for i in range(32):
+            wave.set_vgpr(i, 0x7777)
+            if (wave.exec_mask >> i) & 1:
+                wave.set_vgpr(i, oracle_frexp_mant_f16(F16_POS_ONE))
+        for i in range(32):
+            if (0xF0F0F0F0 >> i) & 1:
+                self.assertEqual(wave.get_vgpr(i), F16_POS_HALF)
+            else:
+                self.assertEqual(wave.get_vgpr(i), 0x7777)
+
 if __name__ == "__main__":
     unittest.main()

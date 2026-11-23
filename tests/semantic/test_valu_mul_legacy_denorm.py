@@ -74,7 +74,10 @@ class LegacyMulDenormalTests(unittest.TestCase):
 
     def test_emits_explicit_f32_flushes_instead_of_a_driver_mode(self):
         _, spv = run_mul(0x00800000, 0x3F000000, "mul:2")
-        # One check for each input, plus the product and final result.
+        # One check for each input (|x| < FLT_MIN gives the legacy zero) and one for the product. mul:2 and mul:4
+        # can't make a normal value subnormal, so they add none; div:2 adds the final one.
+        self.assertGreaterEqual(spv.count("OpFOrdLessThan %bool"), 3)
+        _, spv = run_mul(0x00800000, 0x3F000000, "div:2")
         self.assertGreaterEqual(spv.count("OpFOrdLessThan %bool"), 4)
         self.assertIn("OpFMul %float", spv)
         self.assertIn("OpSelect %float", spv)

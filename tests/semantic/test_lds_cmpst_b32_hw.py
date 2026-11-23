@@ -288,6 +288,102 @@ class TestScalarInterpreter(unittest.TestCase):
         self.assertEqual(interp.regs.vgprs[5], 0xBBBBBBBB)
         self.assertEqual(interp.lds.data[0], 0xCCCCCCCC)
 
+class WaveSize(Enum):
+    WAVE32 = 32
+    WAVE64 = 64
+
+
+class SIMDWaveState:
+    def __init__(self, size: WaveSize = WaveSize.WAVE32):
+        self.size = size
+        self.num_lanes = size.value
+        self.vgprs = [[0] * 256 for _ in range(self.num_lanes)]
+        self.exec_mask = (1 << self.num_lanes) - 1
+
+    def is_lane_active(self, lane: int) -> bool:
+        return bool((self.exec_mask >> lane) & 1)
+
+
+class SIMDLDSInterpreter:
+    @staticmethod
+    def step(insn: DSCmpStB32Instruction, wave: SIMDWaveState, lds: LDSState):
+        for lane in range(wave.num_lanes):
+            if not wave.is_lane_active(lane):
+                continue
+            base_addr = wave.vgprs[lane][insn.vaddr.index]
+            eff_addr = (base_addr + insn.offset) & MASK32
+            cmp_val = wave.vgprs[lane][insn.vcmp.index]
+            swap_val = wave.vgprs[lane][insn.vsrc.index]
+            old = lds.atomic_cmpst_b32(eff_addr, cmp_val, swap_val)
+            if insn.rtn and insn.vdst is not None:
+                wave.vgprs[lane][insn.vdst.index] = old
+
+
+class TestSIMDDivergence(unittest.TestCase):
+    def test_wave32_divergence_and_exec_masking(self):
+        lds = LDSState()
+        wave = SIMDWaveState(WaveSize.WAVE32)
+        wave.exec_mask = 0x55555555  # Alternating lanes
+
+        # Initialize LDS slots with lane index
+        for i in range(32):
+            lds.data[i] = i
+
+        sentinel = 0xDEADBEEF
+        for lane in range(32):
+            wave.vgprs[lane][0] = lane * 4  # byte address
+            wave.vgprs[lane][1] = lane       # cmp val
+            wave.vgprs[lane][2] = 0x100 + lane  # swap val
+            wave.vgprs[lane][3] = sentinel   # vdst
+
+        insn = DSCmpStB32Instruction(
+            vaddr=Operand.vgpr(0),
+            vcmp=Operand.vgpr(1),
+            vsrc=Operand.vgpr(2),
+            rtn=True,
+            vdst=Operand.vgpr(3),
+        )
+        SIMDLDSInterpreter.step(insn, wave, lds)
+
+        for lane in range(32):
+            if lane % 2 == 0:  # Active
+                self.assertEqual(wave.vgprs[lane][3], lane)
+                self.assertEqual(lds.data[lane], 0x100 + lane)
+            else:  # Inactive
+                self.assertEqual(wave.vgprs[lane][3], sentinel)
+                self.assertEqual(lds.data[lane], lane)
+
+    def test_wave64_divergence(self):
+        lds = LDSState()
+        wave = SIMDWaveState(WaveSize.WAVE64)
+        wave.exec_mask = 0x00000000FFFFFFFF  # Lower 32 lanes active
+
+        for i in range(64):
+            lds.data[i] = 0x55
+
+        sentinel = 0xCAFEBABE
+        for lane in range(64):
+            wave.vgprs[lane][0] = lane * 4
+            wave.vgprs[lane][1] = 0x55
+            wave.vgprs[lane][2] = 0xAA
+            wave.vgprs[lane][3] = sentinel
+
+        insn = DSCmpStB32Instruction(
+            vaddr=Operand.vgpr(0),
+            vcmp=Operand.vgpr(1),
+            vsrc=Operand.vgpr(2),
+            rtn=True,
+            vdst=Operand.vgpr(3),
+        )
+        SIMDLDSInterpreter.step(insn, wave, lds)
+
+        for lane in range(32):
+            self.assertEqual(wave.vgprs[lane][3], 0x55)
+            self.assertEqual(lds.data[lane], 0xAA)
+        for lane in range(32, 64):
+            self.assertEqual(wave.vgprs[lane][3], sentinel)
+            self.assertEqual(lds.data[lane], 0x55)
+
 
 if __name__ == "__main__":
     unittest.main()

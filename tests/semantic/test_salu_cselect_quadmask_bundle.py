@@ -314,6 +314,28 @@ class TestSQuadmaskB64Reference(unittest.TestCase):
         r_lo, r_hi, scc = ref_s_quadmask_b64(0, 0)
         self.assertEqual((r_lo, r_hi, scc), (0, 0, 0))
 
+@SaluInterpreterState.register("s_quadmask_b64")
+def _step_quadmask_b64(state: SaluInterpreterState, inst: SaluInstruction) -> tuple[int, int, int]:
+    s0_lo = state.sgpr[inst.s0]
+    s0_hi = state.sgpr[inst.s0 + 1]
+    r_lo, r_hi, scc = ref_s_quadmask_b64(s0_lo, s0_hi)
+    state.sgpr[inst.dst] = r_lo
+    state.sgpr[inst.dst + 1] = r_hi
+    state.scc = scc
+    return r_lo, r_hi, scc
+
+
+class TestSQuadmaskB64Interpreter(unittest.TestCase):
+    def test_interpreter_step_quadmask_b64(self):
+        state = SaluInterpreterState()
+        state.sgpr[2] = 0x01020408
+        state.sgpr[3] = 0x01020408
+        inst = SaluInstruction("s_quadmask_b64", dst=0, s0=2)
+        r_lo, r_hi, scc = state.step(inst)
+        self.assertEqual((r_lo, r_hi, scc), (0x5555, 0, 1))
+        self.assertEqual((state.sgpr[0], state.sgpr[1]), (0x5555, 0))
+        self.assertEqual(state.scc, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -441,5 +441,125 @@ class TestValuAlignbitB32IEEE754(unittest.TestCase):
         self.assertEqual(res_rot1, 0x40000000)
 
 
+class TestValuAlignbitB32NegativeControls(unittest.TestCase):
+    """Negative controls and mutation rejection."""
+
+    def test_shift_mask_mutation_detection(self) -> None:
+        def mutant_mask16(s0: int, s1: int, s2: int) -> int:
+            shift = s2 & 0x0F  # bug: 4 bits instead of 5
+            return ((s0 << (32 - shift)) | (s1 >> shift)) & MASK32 if shift else s1
+
+        # Shift 16 must differ
+        oracle_res = ref_alignbit_b32(0x12345678, 0x9ABCDEF0, 16)
+        mutant_res = mutant_mask16(0x12345678, 0x9ABCDEF0, 16)
+        self.assertNotEqual(oracle_res, mutant_res)
+
+    def test_zero_shift_omission_mutation(self) -> None:
+        def mutant_no_zero_guard(s0: int, s1: int, s2: int) -> int:
+            shift = s2 & 31
+            return ((s1 << (32 - shift)) | (s0 >> shift)) & MASK32
+
+        oracle_res = ref_alignbit_b32(0x12345678, 0x9ABCDEF0, 8)
+        mutant_res = mutant_no_zero_guard(0x12345678, 0x9ABCDEF0, 8)
+        self.assertNotEqual(oracle_res, mutant_res)
+
+
+class TestValuAlignbitB32TranslationAndExecution(unittest.TestCase):
+    """Stage 8: End-to-end SPIR-V translation and fragment execution."""
+
+    def test_translator_all_vgprs(self) -> None:
+        if support is None or rdna2spirv is None:
+            self.skipTest("support/rdna2spirv not available under current Python environment")
+
+        asm = [
+            "v_mov_b32 v0, 0x12345678",
+            "v_mov_b32 v1, 0x9abcdef0",
+            "v_mov_b32 v2, 8",
+            "v_alignbit_b32 v3, v0, v1, v2",
+            "exp mrt0 v3, v3, v3, v3 done vm",
+            "s_endpgm",
+        ]
+        spvasm = support.translate_lines("ps_alignbit_vgprs", asm)
+        words = support.mrt0_words(spvasm)
+        self.assertEqual(words, [0x789ABCDE] * 4)
+
+    def test_translator_mixed_sgpr_imm(self) -> None:
+        if support is None or rdna2spirv is None:
+            self.skipTest("support/rdna2spirv not available under current Python environment")
+
+        asm = [
+            "s_mov_b32 s0, 0x12345678",
+            "v_mov_b32 v0, 0x9abcdef0",
+            "v_alignbit_b32 v1, s0, v0, 16",
+            "exp mrt0 v1, v1, v1, v1 done vm",
+            "s_endpgm",
+        ]
+        spvasm = support.translate_lines("ps_alignbit_sgpr_imm", asm)
+        words = support.mrt0_words(spvasm)
+        self.assertEqual(words, [0x56789ABC] * 4)
+
+    def test_translator_zero_shift_immediate(self) -> None:
+        if support is None or rdna2spirv is None:
+            self.skipTest("support/rdna2spirv not available under current Python environment")
+
+        asm = [
+            "v_mov_b32 v0, 0x12345678",
+            "v_mov_b32 v1, 0x9abcdef0",
+            "v_alignbit_b32 v2, v0, v1, 0",
+            "exp mrt0 v2, v2, v2, v2 done vm",
+            "s_endpgm",
+        ]
+        spvasm = support.translate_lines("ps_alignbit_zero_imm", asm)
+        words = support.mrt0_words(spvasm)
+        self.assertEqual(words, [0x9ABCDEF0] * 4)
+
+    def test_translator_dynamic_shift_masking(self) -> None:
+        if support is None or rdna2spirv is None:
+            self.skipTest("support/rdna2spirv not available under current Python environment")
+
+        asm = [
+            "v_mov_b32 v0, 0x12345678",
+            "v_mov_b32 v1, 0x9abcdef0",
+            "v_mov_b32 v2, 40",  # 40 & 31 = 8
+            "v_alignbit_b32 v3, v0, v1, v2",
+            "exp mrt0 v3, v3, v3, v3 done vm",
+            "s_endpgm",
+        ]
+        spvasm = support.translate_lines("ps_alignbit_dyn_mask", asm)
+        words = support.mrt0_words(spvasm)
+        self.assertEqual(words, [0x789ABCDE] * 4)
+
+    def test_translator_aliasing(self) -> None:
+        if support is None or rdna2spirv is None:
+            self.skipTest("support/rdna2spirv not available under current Python environment")
+
+        asm = [
+            "v_mov_b32 v0, 0x12345678",
+            "v_mov_b32 v1, 0x9abcdef0",
+            "v_alignbit_b32 v0, v0, v1, 8",
+            "exp mrt0 v0, v0, v0, v0 done vm",
+            "s_endpgm",
+        ]
+        spvasm = support.translate_lines("ps_alignbit_alias", asm)
+        words = support.mrt0_words(spvasm)
+        self.assertEqual(words, [0x789ABCDE] * 4)
+
+    def test_spirv_structure(self) -> None:
+        if support is None or rdna2spirv is None:
+            self.skipTest("support/rdna2spirv not available under current Python environment")
+
+        asm = [
+            "v_mov_b32 v0, 0x12345678",
+            "v_mov_b32 v1, 0x9abcdef0",
+            "v_alignbit_b32 v2, v0, v1, 8",
+            "exp mrt0 v2, v2, v2, v2 done vm",
+            "s_endpgm",
+        ]
+        spvasm = support.translate_lines("ps_alignbit_struct", asm)
+        self.assertIn("OpShiftRightLogical", spvasm)
+        self.assertIn("OpShiftLeftLogical", spvasm)
+        self.assertIn("OpBitwiseOr", spvasm)
+
+
 if __name__ == "__main__":
     unittest.main()

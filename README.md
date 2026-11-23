@@ -230,13 +230,16 @@ To use Proton outside Steam, install umu-launcher and put `--proton` before the 
 [umu-launcher installation](https://github.com/Open-Wine-Components/umu-launcher#installing)
 
 ```sh
-cd "/path/to/package"
-"/path/to/port/gta6rt.sh" --proton --dry-run ./game_scarlett_master.exe
+"/path/to/port/gta6rt.sh" --proton --dry-run
 ```
 
 The launcher uses a prefix at `<out>/.proton-prefix` by default. Set `LEONIDA_PROTON_PREFIX` to choose a different
 Proton prefix, or `PROTONPATH` to choose a Proton build. On the first launch, `umu-run` may download Proton and its
 Steam Runtime.
+
+On Linux, run `<out>/gta6rt.sh --dry-run` to inspect the packaged title's imports, then
+`<out>/gta6rt.sh --init` to check TLS callbacks and DLL initialization. Use `<out>/gta6rt.sh --run` for startup.
+These commands use the package in `game_path.txt`, the port's `overlay` for writes, and Vulkan by default.
 
 When the Vulkan backend is selected with `LEONIDA_D3D12=vulkan`, the packaged runtime finds the translated shaders
 in `<work>/shaders/spirv` using `shader_path.txt` beside `gta6rt.exe`. Set `LEONIDA_SHADERS` to use another directory.

@@ -71,6 +71,8 @@ def parse_asav(d):
         'file_size': len(d),
     }
     h['timestamp_utc'] = ts(h['timestamp'])
+    if h['payload_offset'] < ASAV_HDR:
+        raise ValueError(f"payload offset {h['payload_offset']:#x} overlaps the {ASAV_HDR:#x}-byte ASAV header")
     if h['payload_offset'] > len(d):
         raise ValueError(f"payload offset {h['payload_offset']:#x} is past the end of a {len(d)}-byte file")
     return h

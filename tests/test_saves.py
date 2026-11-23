@@ -425,6 +425,66 @@ class AsavTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             saves.parse_asav(b"JSAV" + bytes(0x200))
 
+    def test_payload_offsets_inside_header_are_rejected(self):
+        for offset in (0, 4, 0x14, 0x160, saves.ASAV_HDR - 1):
+            data = bytearray(make_asav(kind=2, payload=b'{"test":1}'))
+            struct.pack_into("<I", data, 0x14, offset)
+            with self.subTest(offset=offset):
+                with self.assertRaisesRegex(ValueError, "payload offset.*overlaps.*ASAV header"):
+                    saves.parse_asav(bytes(data))
+
+    def test_payload_bounds_allow_padding_and_empty_payloads(self):
+        for padding in (0, 16):
+            for payload in (b'{"test":1}', b""):
+                original = make_asav(kind=2, payload=payload)
+                data = bytearray(original[:saves.ASAV_HDR] + bytes(padding) + payload)
+                struct.pack_into("<I", data, 0x14, saves.ASAV_HDR + padding)
+                struct.pack_into("<I", data, 0x1C, len(data))
+                struct.pack_into("<Q", data, 0x168, len(data))
+                with self.subTest(padding=padding, payload=payload):
+                    header = saves.parse_asav(bytes(data))
+                    self.assertEqual(saves.asav_payload(bytes(data), header), payload)
+
+    def test_overlapping_payload_cli_preserves_extracted_files(self):
+        previous = {"header.json": b'{"previous":true}\n', "header.bin": b"previous header",
+                    "payload.bin": b"previous payload", "payload.json": b'{"previous":true}\n'}
+        for offset in (0, saves.ASAV_HDR - 1):
+            data = bytearray(make_asav(kind=2, payload=b'{"test":1}'))
+            struct.pack_into("<I", data, 0x14, offset)
+            for existing in (True, False):
+                with self.subTest(offset=offset, existing=existing), tempfile.TemporaryDirectory() as tmp:
+                    source, out = os.path.join(tmp, "bad.asav"), os.path.join(tmp, "out")
+                    write(source, bytes(data))
+                    if existing:
+                        for name, content in previous.items():
+                            write(os.path.join(out, name), content)
+                    result = subprocess.run([sys.executable, "-I", TOOL, "extract", source, out],
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn("overlaps", result.stderr)
+                    self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+                    self.assertNotIn("Traceback", result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertEqual(rd(source), bytes(data))
+                    if existing:
+                        self.assertEqual(sorted(os.listdir(out)), sorted(previous))
+                        for name, content in previous.items():
+                            self.assertEqual(rd(os.path.join(out, name)), content)
+                    else:
+                        self.assertEqual(os.listdir(out), [])
+
+    def test_info_rejects_overlapping_payload_without_traceback(self):
+        data = bytearray(make_asav(kind=2))
+        struct.pack_into("<I", data, 0x14, 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            source = os.path.join(tmp, "bad.asav")
+            write(source, bytes(data))
+            result = subprocess.run([sys.executable, "-I", TOOL, "info", source], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("payload offset 0x0 overlaps", result.stderr)
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
 
 class ProfileRecordTest(unittest.TestCase):
     def test_parse_synthetic_profile(self):

@@ -359,6 +359,13 @@ class TestVMin3F16SIMDAndIEEE(unittest.TestCase):
                 self.assertEqual(hi, 0x55AA)
                 self.assertEqual(lo, expected)
 
+class TestVMin3F16TranslatorAndControls(unittest.TestCase):
+    """Stage 4 for v_min3_f16: translator integration and negative controls."""
+
+    def test_v_min3_f16_negative_controls(self):
+        with self.assertRaises(Exception):
+            support.translate_lines("ps_neg_v_min3_f16", ["v_min3_f16", "s_endpgm"])
+
 
 if __name__ == '__main__':
     unittest.main()

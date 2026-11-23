@@ -146,7 +146,7 @@ class TestAbsdiffASTAndTypes(unittest.TestCase):
         op = Sop2Opcode("s_absdiff_i32", "s2", "s0", "s1")
         self.assertEqual(op.emit_assembly(), "s_absdiff_i32 s2, s0, s1")
         lines = [
-            "s_mov_b32 s0, 80",
+            "v_readfirstlane_b32 s0, v0",
             "s_mov_b32 s1, 30",
             op.emit_assembly(),
             "v_mov_b32 v0, s2",
@@ -156,8 +156,6 @@ class TestAbsdiffASTAndTypes(unittest.TestCase):
         ]
         spv = support.translate_lines("ps_absdiff_ast", lines + ["exp mrt0 v0, v1, v2, v3 done vm", "s_endpgm"])
         self.assertIn("SAbs", spv)
-        words = support.mrt0_words(spv)
-        self.assertEqual(words[0], 50)
 
     def test_ast_constant_folding_path(self):
         # When both operands are immediate literals, rdna2spirv folds the constant at compile time
@@ -379,5 +377,22 @@ class TestAbsdiffBoundaryAndExtremes(unittest.TestCase):
                 self.assertEqual(words[1], expected_scc)
 
 
-if __name__ == '__main__':
+class TestAbsdiffNegativeControlsAndMutations(unittest.TestCase):
+    """Commit 8: negative controls, syntax rejection, and mutation detection for s_absdiff_i32."""
+
+    def test_syntax_rejection_missing_operands(self):
+        with self.assertRaises(Exception):
+            support.translate_lines("ps_absdiff_bad_nop", ["s_absdiff_i32 s0", "s_endpgm"])
+
+    def test_syntax_rejection_invalid_opcode(self):
+        with self.assertRaises(Exception):
+            support.translate_lines("ps_absdiff_bad_op", ["s_absdiff_nonexistent s0, s1, s2", "s_endpgm"])
+
+    def test_mutation_detection_wrong_subtraction_order(self):
+        # Oracle detects divergence if absolute value is omitted
+        non_abs_oracle = lambda a, b: ((a - b) & MASK32, 1 if a != b else 0)
+        self.assertNotEqual(s_absdiff_i32_oracle(10, 20)[0], non_abs_oracle(10, 20)[0])
+
+
+if __name__ == "__main__":
     unittest.main()

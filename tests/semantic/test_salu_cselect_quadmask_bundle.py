@@ -117,6 +117,21 @@ class TestSCSelectB32Translator(unittest.TestCase):
         words = mrt0_words(spv)
         self.assertEqual(words, [0x12345678, 0x87654321, 0x12345678, 0x87654321])
 
+def ref_s_cselect_b64(scc: int, s0_lo: int, s0_hi: int, s1_lo: int, s1_hi: int) -> tuple[int, int]:
+    if (scc & 1) != 0:
+        return s0_lo & MASK32, s0_hi & MASK32
+    return s1_lo & MASK32, s1_hi & MASK32
+
+
+class TestSCSelectB64Reference(unittest.TestCase):
+    def test_ref_scc1_selects_first_pair(self):
+        r_lo, r_hi = ref_s_cselect_b64(1, 0x11112222, 0x33334444, 0x55556666, 0x77778888)
+        self.assertEqual((r_lo, r_hi), (0x11112222, 0x33334444))
+
+    def test_ref_scc0_selects_second_pair(self):
+        r_lo, r_hi = ref_s_cselect_b64(0, 0x11112222, 0x33334444, 0x55556666, 0x77778888)
+        self.assertEqual((r_lo, r_hi), (0x55556666, 0x77778888))
+
 
 if __name__ == "__main__":
     unittest.main()

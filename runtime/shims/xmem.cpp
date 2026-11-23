@@ -262,6 +262,7 @@ std::unordered_map<uint64_t, PhysicalPage> g_pages;  // page number -> backing
 std::vector<uint64_t> g_free_slots;
 uint64_t g_next_slot = 1;
 std::unordered_map<uintptr_t, uint64_t> g_mapped;  // mapped 64 KiB address -> page number
+std::map<uintptr_t, SIZE_T> g_reservations;  // base -> size of each placeholder reservation XMemVirtualAlloc made
 
 // With g_phys_mutex held. A window replaces every window it overlaps: the title released those regions (with
 // kernel32!VirtualFree, which the shim does not see) before the host could hand the addresses out again.
@@ -407,9 +408,10 @@ void* WINAPI XMemVirtualAlloc(void* address, SIZE_T size, DWORD allocation_type,
     }
     if (new_placeholder || window) {
         void* const result = reserve_placeholder(address, size, base_granularity);
-        if (result && window) {
+        if (result) {
             const std::lock_guard lock(g_phys_mutex);
-            record_window(result, size, host_prot);
+            g_reservations[reinterpret_cast<uintptr_t>(result)] = size;
+            if (window) record_window(result, size, host_prot);
         }
         return result;
     }
@@ -692,21 +694,71 @@ LPVOID WINAPI TitleVirtualAlloc(LPVOID address, SIZE_T size, DWORD allocation_ty
     return VirtualAlloc(address, size, allocation_type & ~(kMemGraphics | kMemTitle), host_protect(protect));
 }
 
+// With g_phys_mutex held. Unmaps every physical page mapped in [base, base + size), releases every host allocation in
+// it (the placeholders the map calls split it into, and any committed replacement), and forgets the windows and
+// reservations it held. Keeps going past a failure, so as much as possible is released.
+bool release_range(uintptr_t base, SIZE_T size) {
+    const uintptr_t end = base + size;
+    bool ok = true;
+    std::vector<uintptr_t> mapped;
+    for (const auto& entry : g_mapped) {
+        if (entry.first >= base && entry.first < end) mapped.push_back(entry.first);
+    }
+    for (const uintptr_t address : mapped) ok &= unmap_page(address);
+    for (uintptr_t a = base; a < end;) {
+        MEMORY_BASIC_INFORMATION info{};
+        if (!VirtualQuery(reinterpret_cast<void*>(a), &info, sizeof(info))) return false;
+        const uintptr_t next = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+        const uintptr_t owner = reinterpret_cast<uintptr_t>(info.AllocationBase);
+        if (info.State != MEM_FREE) {
+            if (owner < base || !VirtualFree(info.AllocationBase, 0, MEM_RELEASE)) ok = false;
+        }
+        a = next > a ? next : a + kPhysicalPageSize;
+    }
+    g_windows.erase(g_windows.lower_bound(base), g_windows.lower_bound(end));
+    g_reservations.erase(g_reservations.lower_bound(base), g_reservations.lower_bound(end));
+    return ok;
+}
+
+// kernel32!VirtualFree as a title calls it. The retail executable releases its physical-page reservations this way.
+// Once pages have been mapped, such a reservation is one placeholder per 64 KiB page plus the views in it, and the
+// host's VirtualFree(base, 0, MEM_RELEASE) would release only the first of them. A MEM_RELEASE at the base of a
+// reservation or window XMemVirtualAlloc made therefore releases all of it here; every other call goes to the host.
+BOOL WINAPI TitleVirtualFree(LPVOID address, SIZE_T size, DWORD free_type) {
+    if (free_type == MEM_RELEASE) {
+        const uintptr_t base = reinterpret_cast<uintptr_t>(address);
+        const std::lock_guard lock(g_phys_mutex);
+        SIZE_T recorded = 0;
+        if (const auto it = g_reservations.find(base); it != g_reservations.end()) {
+            recorded = it->second;
+        } else if (const auto window = g_windows.find(base); window != g_windows.end()) {
+            recorded = window->second.size;
+        }
+        if (recorded != 0 && (size == 0 || size == recorded)) {
+            if (release_range(base, recorded)) return TRUE;
+            SetLastError(ERROR_INVALID_ADDRESS);
+            return FALSE;
+        }
+    }
+    return VirtualFree(address, size, free_type);
+}
+
 }  // namespace
 
-#define TITLE_VIRTUAL_ALLOC(dll) {dll, "VirtualAlloc", reinterpret_cast<void*>(&TitleVirtualAlloc)}
+#define TITLE_MEMORY(dll) {dll, "VirtualAlloc", reinterpret_cast<void*>(&TitleVirtualAlloc)}, \
+                                 {dll, "VirtualFree", reinterpret_cast<void*>(&TitleVirtualFree)}
 
 // The classic libraries and the memory api sets a title's imports name.
 SHIM_TABLE(title_memory,
-    TITLE_VIRTUAL_ALLOC("kernel32.dll"),
-    TITLE_VIRTUAL_ALLOC("kernelbase.dll"),
-    TITLE_VIRTUAL_ALLOC("api-ms-win-core-memory-l1-1-0.dll"),
-    TITLE_VIRTUAL_ALLOC("api-ms-win-core-memory-l1-1-1.dll"),
-    TITLE_VIRTUAL_ALLOC("api-ms-win-core-memory-l1-1-2.dll"),
-    TITLE_VIRTUAL_ALLOC("api-ms-win-core-memory-l1-1-3.dll"),
-    TITLE_VIRTUAL_ALLOC("api-ms-win-core-memory-l1-1-4.dll"),
-    TITLE_VIRTUAL_ALLOC("api-ms-win-core-memory-l1-1-5.dll"),
-    TITLE_VIRTUAL_ALLOC("api-ms-win-core-memory-l1-1-6.dll"),
+    TITLE_MEMORY("kernel32.dll"),
+    TITLE_MEMORY("kernelbase.dll"),
+    TITLE_MEMORY("api-ms-win-core-memory-l1-1-0.dll"),
+    TITLE_MEMORY("api-ms-win-core-memory-l1-1-1.dll"),
+    TITLE_MEMORY("api-ms-win-core-memory-l1-1-2.dll"),
+    TITLE_MEMORY("api-ms-win-core-memory-l1-1-3.dll"),
+    TITLE_MEMORY("api-ms-win-core-memory-l1-1-4.dll"),
+    TITLE_MEMORY("api-ms-win-core-memory-l1-1-5.dll"),
+    TITLE_MEMORY("api-ms-win-core-memory-l1-1-6.dll"),
 );
 
 SHIM_TABLE(xmem,

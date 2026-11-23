@@ -524,5 +524,37 @@ class TestSubF16RegisterAliasing(unittest.TestCase):
         self.assertEqual(machine.vgprs[0] & 0xFFFF, POS_ZERO)
 
 
+# ==============================================================================
+# Condition Codes, Status Flags, and Invariance
+# ==============================================================================
+
+class TestSubF16StatusFlags(unittest.TestCase):
+    def test_vcc_and_scc_invariance(self):
+        machine = ScalarMachine()
+        machine.scc = 1
+        machine.vgprs[1] = THREE
+        machine.vgprs[2] = ONE
+        insn = VSubF16Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 1),
+            src1=RegisterOperand(OperandType.VGPR, 2),
+        )
+        machine.step(insn)
+        # VOP2 v_sub_f16 does not alter SCC
+        self.assertEqual(machine.scc, 1)
+
+    def test_exec_mask_invariance(self):
+        wave = SIMDWave(wave_size=64)
+        original_mask = 0xAAAA_5555_AAAA_5555
+        wave.exec_mask = original_mask
+        insn = VSubF16Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 1),
+            src1=RegisterOperand(OperandType.VGPR, 2),
+        )
+        wave.step(insn)
+        self.assertEqual(wave.exec_mask, original_mask)
+
+
 if __name__ == '__main__':
     unittest.main()

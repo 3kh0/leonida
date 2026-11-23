@@ -2688,8 +2688,8 @@ Implemented (`QueryHeap` in `runtime/shims/d3d12_vulkan_device.cpp`, the query c
   results still match and all 11 statistics counters are zero. Without a statistics pool (single-list `replay()` or
   a queue without the summation helper), these three commands are refused before helper scratch allocation or
   recording. The resolve fallback is unchanged: only resolves needing dispatches are refused there.
-- **Timestamps.** `GetTimestampFrequency` is `1e9 / timestampPeriod` (1 GHz on the test GPU). Each D3D12 queue has
-  its own `VkQueue`, but `timestampPeriod` is a device property, so they share one frequency.
+- **Timestamps.** `GetTimestampFrequency` is `1e9 / timestampPeriod` (1 GHz on the test GPU). All queues of a
+  device use the same `timestampPeriod`, a device property, so they share one frequency.
 - **Timestamp resolves on MoltenVK.** On Apple GPUs, MoltenVK delays every `vkCmdWriteTimestamp` to the end of
   the current Metal encoder, where it is sampled by a blit pass of its own (`encodeTimestampStageCounterSamples`,
   because Apple GPUs sample only at stage boundaries). `vkCmdCopyQueryPoolResults` resolves the counters with a

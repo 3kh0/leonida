@@ -312,5 +312,63 @@ class TestValuAlignbitB32SIMDDivergence(unittest.TestCase):
             self.assertEqual(state.lanes_vgpr[lane][0], 0xCAFE0000 | lane)
 
 
+class TestValuAlignbitB32Aliasing(unittest.TestCase):
+    """Stage 5: Register aliasing and in-place operand preservation."""
+
+    def test_aliasing_dst_src0(self) -> None:
+        state = ScalarMachineState()
+        state.write_vgpr(0, 0x12345678)
+        state.write_vgpr(1, 0x9ABCDEF0)
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.vgpr(0),
+            src1=Operand.vgpr(1),
+            src2=Operand.imm(8),
+        )
+        ScalarInterpreter().step(instr, state)
+        self.assertEqual(state.vgprs[0], 0x789ABCDE)
+
+    def test_aliasing_dst_src1(self) -> None:
+        state = ScalarMachineState()
+        state.write_vgpr(0, 0x9ABCDEF0)
+        state.write_vgpr(1, 0x12345678)
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.vgpr(1),
+            src1=Operand.vgpr(0),
+            src2=Operand.imm(8),
+        )
+        ScalarInterpreter().step(instr, state)
+        self.assertEqual(state.vgprs[0], 0x789ABCDE)
+
+    def test_aliasing_dst_src2(self) -> None:
+        state = ScalarMachineState()
+        state.write_vgpr(0, 8)
+        state.write_vgpr(1, 0x12345678)
+        state.write_vgpr(2, 0x9ABCDEF0)
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.vgpr(1),
+            src1=Operand.vgpr(2),
+            src2=Operand.vgpr(0),
+        )
+        ScalarInterpreter().step(instr, state)
+        self.assertEqual(state.vgprs[0], 0x789ABCDE)
+
+    def test_aliasing_all_operands(self) -> None:
+        state = ScalarMachineState()
+        state.write_vgpr(0, 0x87654321)
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.vgpr(0),
+            src1=Operand.vgpr(0),
+            src2=Operand.vgpr(0),
+        )
+        # shift = 0x87654321 & 31 = 1
+        expected = ref_alignbit_b32(0x87654321, 0x87654321, 1)
+        ScalarInterpreter().step(instr, state)
+        self.assertEqual(state.vgprs[0], expected)
+
+
 if __name__ == "__main__":
     unittest.main()

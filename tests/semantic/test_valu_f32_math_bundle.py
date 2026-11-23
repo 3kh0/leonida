@@ -251,5 +251,44 @@ class TestFractF32IEEE754Handling(unittest.TestCase):
             self.assertEqual(ref_fract_f32(nan), nan)
 
 
+# ------------------------------------------------------------------------------
+# v_fract_f32 Negative Controls and Translator Hardware Execution
+# ------------------------------------------------------------------------------
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import support
+import rdna2spirv
+
+
+class TestFractF32RejectionAndHardwareTranslator(unittest.TestCase):
+    def test_syntax_rejection(self):
+        with self.assertRaises(ValueError):
+            RegisterOperand(OperandType.VGPR, 300)
+
+    def test_hardware_translator_execution(self):
+        cases = [
+            (f32_to_bits(2.25), f32_to_bits(0.25)),
+            (f32_to_bits(-0.25), f32_to_bits(0.75)),
+            (POS_ZERO, 0),
+            (NEG_ZERO, 0),
+            (POS_INF, 0xFFC0_0000),
+            (NEG_INF, 0xFFC0_0000),
+            (QNAN, QNAN),
+            (0x0000_0001, 0),
+        ]
+        for src_val, expected in cases:
+            prog = [
+                f"v_mov_b32 v1, {src_val:#x}",
+                "v_fract_f32 v0, v1",
+                "exp mrt0 v0, v0, v0, v0 done vm",
+                "s_endpgm",
+            ]
+            spv = support.translate_lines("ps_fract_hw_test", prog)
+            words = support.mrt0_words(spv)
+            self.assertEqual(words[0], expected, f"Failed on {src_val:#x}: got {words[0]:#x}, expected {expected:#x}")
+
+
 if __name__ == '__main__':
     unittest.main()

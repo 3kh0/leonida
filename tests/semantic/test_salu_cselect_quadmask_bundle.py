@@ -401,6 +401,15 @@ class TestSBitset0B32Interpreter(unittest.TestCase):
         self.assertEqual(state.sgpr[0], 0xFFFFFFEF)
         self.assertEqual(state.scc, 1)
 
+class TestSBitset0B32EdgeCases(unittest.TestCase):
+    def test_already_cleared_bit(self):
+        self.assertEqual(ref_s_bitset0_b32(0x00000000, 10), 0)
+
+    def test_all_single_bit_clears(self):
+        for b in range(32):
+            val = ref_s_bitset0_b32(0xFFFFFFFF, b)
+            self.assertEqual(val ^ (1 << b), 0xFFFFFFFF)
+
 
 if __name__ == "__main__":
     unittest.main()

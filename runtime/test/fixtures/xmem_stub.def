@@ -1,3 +1,4 @@
 EXPORTS
     XMemAlloc
     XMemFree
+    XMemVirtualAlloc

@@ -732,10 +732,20 @@ def check(op, vals, srcs, e64, out_mods):
     if status != "ok":
         return status, got
     want_words = [want[0], want[1], vals[obs[0]], vals[obs[1]]]
-    if all(same(w, g) or (k >= 2 and same(w | 0x400000 if is_nan(w) else w, g)) for k, (w, g) in
-           enumerate(zip(want_words, got))):
+    if words_match(want_words, got):
+        return "match", None
+    if want_words[0] == 0x80000000 and any(m in OMOD for m in out_mods) and omod_active(HW_PRIMARY, op) and \
+            words_match([0] + want_words[1:], got):
+        # The hardware's word (dev_omod_neg_zero): an active omod turns the -0 into +0. The translator gives it where
+        # it models that rule (v_mul_legacy_f32) and the IEEE -0 elsewhere, so either word is a match here.
         return "match", None
     return "mismatch", (want_words, got, text)
+
+
+def words_match(want_words, got):
+    """The four translated words against the model's; an observed NaN source may come back quieted."""
+    return all(same(w, g) or (k >= 2 and same(w | 0x400000 if is_nan(w) else w, g)) for k, (w, g) in
+               enumerate(zip(want_words, got)))
 
 
 def fdesc(b):

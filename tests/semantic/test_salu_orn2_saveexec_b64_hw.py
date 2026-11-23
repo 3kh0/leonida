@@ -337,5 +337,65 @@ class TestSaluOrn2SaveexecB64SIMDDivergence(unittest.TestCase):
         self.assertIn("OpNot", spv)
 
 
+
+
+class TestSaluOrn2SaveexecB64Aliasing(unittest.TestCase):
+    """Test suite for register aliasing and in-place operand preservation."""
+
+    def test_aliasing_destination_same_as_source(self):
+        # s_orn2_saveexec_b64 s[4:5], s[4:5]
+        # Destination s[4:5] receives the old EXEC, but new EXEC is computed using the old value of s[4:5]
+        old_exec = 0xAAAAAAAAAAAAAAAA
+        src_init = 0x5555555555555555
+        state = ScalarRegisterState(exec_mask=old_exec)
+        state.set_sgpr_64(4, src_init)
+
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(4, 2),
+            src0=ASTOperand.sgpr(4, 2),
+        )
+        state.execute(inst)
+
+        # Destination must hold old_exec
+        self.assertEqual(state.get_sgpr_64(4), old_exec)
+        # New EXEC must be computed from src_init and old_exec:
+        expected_exec = src_init | (~old_exec & MASK64)
+        self.assertEqual(state.exec_mask, expected_exec)
+
+    def test_aliasing_source_is_exec(self):
+        # s_orn2_saveexec_b64 s[2:3], exec
+        # ssrc0 = old_exec, new EXEC = old_exec | ~old_exec = ALL_LANES_ACTIVE (0xFFFFFFFFFFFFFFFF)
+        old_exec = 0x0123456789ABCDEF
+        state = ScalarRegisterState(exec_mask=old_exec)
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(2, 2),
+            src0=ASTOperand.exec_mask(),
+        )
+        state.execute(inst)
+        self.assertEqual(state.get_sgpr_64(2), old_exec)
+        self.assertEqual(state.exec_mask, ALL_LANES_ACTIVE)
+        self.assertEqual(state.scc, 1)
+
+    def test_untouched_sgprs_preserved(self):
+        state = ScalarRegisterState(exec_mask=0x1234)
+        for i in range(0, 106, 2):
+            state.set_sgpr_64(i, 0xCAFE0000 + i)
+
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(10, 2),
+            src0=ASTOperand.sgpr(12, 2),
+        )
+        state.execute(inst)
+
+        for i in range(0, 106, 2):
+            if i == 10:
+                self.assertEqual(state.get_sgpr_64(i), 0x1234)
+            else:
+                self.assertEqual(state.get_sgpr_64(i), 0xCAFE0000 + i)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -55,6 +55,10 @@ def _load_png_bytes(tex_path: str, max_size: int = 0) -> tuple[bytes | None, str
             return None, str(exc)
         if not data:
             return None, "the PNG file is empty"
+        # The signature and complete initial 13-byte IHDR chunk must fit.
+        if (len(data) < 33 or data[:8] != b"\x89PNG\r\n\x1a\n"
+                or data[8:16] != b"\x00\x00\x00\rIHDR"):
+            return None, "invalid PNG signature or IHDR header"
         return data, ""
     elif lower.endswith(".dds"):
         try:

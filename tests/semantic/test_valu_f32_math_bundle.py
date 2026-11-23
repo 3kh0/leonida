@@ -232,5 +232,24 @@ class TestFractF32SIMDDivergence(unittest.TestCase):
                 self.assertEqual(wave.vgprs[0][lane], 0xDEAD_BEEF)
 
 
+# ------------------------------------------------------------------------------
+# v_fract_f32 IEEE 754 Boundary Extremes, Subnormals, and NaN Handling
+# ------------------------------------------------------------------------------
+
+class TestFractF32IEEE754Handling(unittest.TestCase):
+    def test_clamp_below_one_on_tiny_negative(self):
+        # A tiny negative float whose x - floor(x) would round to 1.0f in f32
+        tiny_neg = f32_to_bits(-1e-9)
+        self.assertEqual(ref_fract_f32(tiny_neg), LARGEST_BELOW_ONE)
+
+    def test_subnormals_flush_to_zero(self):
+        for sub in (0x0000_0001, 0x0040_0000, 0x007F_FFFF, 0x8000_0001, 0x807F_FFFF):
+            self.assertEqual(ref_fract_f32(sub), 0)
+
+    def test_nans_pass_through(self):
+        for nan in (QNAN, SNAN, 0x7FC0_1234, 0xFFC0_ABCD):
+            self.assertEqual(ref_fract_f32(nan), nan)
+
+
 if __name__ == '__main__':
     unittest.main()

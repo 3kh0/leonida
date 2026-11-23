@@ -413,5 +413,21 @@ class TestFrexpExpI32F32SIMDDivergence(unittest.TestCase):
             self.assertEqual(wave.vgprs[0][lane], expected)
 
 
+# ------------------------------------------------------------------------------
+# v_frexp_exp_i32_f32 IEEE 754 Boundary Extremes, Subnormals, and NaN Handling
+# ------------------------------------------------------------------------------
+
+class TestFrexpExpI32F32IEEE754Handling(unittest.TestCase):
+    def test_boundary_normals(self):
+        # MIN_NORMAL: e = 1 -> exp = 1 - 126 = -125 (0xFFFFFF83)
+        self.assertEqual(ref_frexp_exp_i32_f32(MIN_NORMAL), 0xFFFF_FF83)
+        # MAX_NORMAL: e = 254 -> exp = 254 - 126 = 128 (0x00000080)
+        self.assertEqual(ref_frexp_exp_i32_f32(MAX_NORMAL), 128)
+
+    def test_all_special_cases_zero(self):
+        for u in (POS_ZERO, NEG_ZERO, POS_INF, NEG_INF, QNAN, SNAN, 0x0000_0001, 0x007F_FFFF):
+            self.assertEqual(ref_frexp_exp_i32_f32(u), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

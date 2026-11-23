@@ -201,6 +201,13 @@ class TestVFmacF32IEEEEdgeCases(unittest.TestCase):
                 words = run_bundle_ps(lines, f"ps_ieee_fmac_{v0_in:#x}")
                 self.assertEqual(words[0], expected)
 
+class TestVFmacF32TranslatorAndControls(unittest.TestCase):
+    """Stage 5 for v_fmac_f32: translator integration and negative controls."""
+
+    def test_v_fmac_f32_negative_controls(self):
+        with self.assertRaises(Exception):
+            support.translate_lines("ps_neg_v_fmac_f32", ["v_fmac_f32", "s_endpgm"])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -165,7 +165,7 @@ class TestFolder(unittest.TestCase):
         with open(self.dialogue, "w", encoding="utf-8", newline="\n") as f:
             csv.writer(f, lineterminator="\n").writerows([
                 ["wave", "key", "label", "speaker", "text_de", "text_en"],
-                ["heistau_abcd_01", "HEISTAU_ABCD", "HEIST_ZED_1", "ZED", "~z~Los."],
+                ["HEISTAU_ABCD_01", "HEISTAU_ABCD", "HEIST_ZED_1", "ZED", "~z~Los."],
             ])
         parts = ("story", "bank_01", "0ABCDEF1.ogg")
         path = os.path.join(self.opus, *parts)
@@ -183,14 +183,19 @@ class TestFolder(unittest.TestCase):
 
     def test_cli_rejects_missing_dialogue_wave_before_tagging(self):
         originals = {path: path.read_bytes() for path in Path(self.opus).rglob("*.ogg")}
-        for row in (["ZED", "Move."], ["ZED", "Move.", ""]):
-            with self.subTest(row=row):
+        header = ["speaker", "text_en", "wave"]
+        valid = ["ZED", "Ready.", "heistau_abcd_01"]
+        cases = [
+            ([header, valid, ["ZED", "Move."]], "line 3"),
+            ([header, valid, ["ZED", "Move.", ""]], "line 3"),
+            ([header, valid, ["ZED", "Move.", " \t "]], "line 3"),
+            ([["speaker", "text_en"], ["ZED", "Move."]], "header"),
+            ([["speaker", "text_en"]], "header"),
+        ]
+        for rows, location in cases:
+            with self.subTest(rows=rows):
                 with open(self.dialogue, "w", encoding="utf-8", newline="\n") as f:
-                    csv.writer(f, lineterminator="\n").writerows([
-                        ["speaker", "text_en", "wave"],
-                        ["ZED", "Ready.", "heistau_abcd_01"],
-                        row,
-                    ])
+                    csv.writer(f, lineterminator="\n").writerows(rows)
                 result = subprocess.run(
                     [sys.executable, "-I", TOOL, self.opus, "--names", self.names,
                      "--source", "story", "--dialogue", self.dialogue],
@@ -198,7 +203,7 @@ class TestFolder(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertIn(self.dialogue, result.stderr)
-                self.assertIn("line 3", result.stderr)
+                self.assertIn(location, result.stderr)
                 self.assertIn("wave", result.stderr)
                 self.assertEqual(len(result.stderr.strip().splitlines()), 1)
                 self.assertNotIn("Traceback", result.stderr)

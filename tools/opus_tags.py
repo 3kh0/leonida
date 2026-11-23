@@ -125,11 +125,14 @@ def load_dialogue(path):
     """{wave: row} from text_tables.py dialogue CSV, and the language codes in column order."""
     with open(path, encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
-        langs = [f[5:] for f in reader.fieldnames or [] if f.startswith("text_")]
+        fields = reader.fieldnames or ()
+        if "wave" not in fields:
+            raise ValueError(f"{path}: missing 'wave' column in dialogue CSV header")
+        langs = [f[5:] for f in fields if f.startswith("text_")]
         out = {}
         for row in reader:
-            wave = row.get("wave")
-            if not wave:
+            wave = row["wave"]
+            if not wave or wave.isspace():
                 raise ValueError(f"{path}: line {reader.line_num}: missing dialogue wave")
             out[wave.lower()] = row
         return out, langs

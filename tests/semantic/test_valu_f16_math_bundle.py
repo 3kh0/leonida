@@ -160,5 +160,16 @@ class VFractF16SimdDivergenceTests(unittest.TestCase):
             else:
                 self.assertEqual(wave.get_vgpr(i), 0xEEEE)
 
+class VFractF16EdgeCasesTests(unittest.TestCase):
+    def test_fract_clamp_below_one(self):
+        # Any value extremely close to 1.0 clamps to 0x3BFF
+        near_one = 0x3BFF
+        self.assertEqual(oracle_fract_f16(near_one), 0x3BFF)
+
+    def test_fract_infinity_and_nan(self):
+        self.assertEqual(oracle_fract_f16(F16_POS_INF), F16_POS_ZERO)
+        self.assertEqual(oracle_fract_f16(F16_NEG_INF), F16_POS_ZERO)
+        self.assertTrue(is_nan_f16(oracle_fract_f16(F16_QNAN)))
+
 if __name__ == "__main__":
     unittest.main()

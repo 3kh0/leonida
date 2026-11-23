@@ -643,5 +643,59 @@ class TestFrexpMantF32RejectionAndHardwareTranslator(unittest.TestCase):
             self.assertEqual(words[0], expected, f"Failed on {src_val:#x}: got {words[0]:#x}, expected {expected:#x}")
 
 
+# ------------------------------------------------------------------------------
+# v_ldexp_f32 Reference Oracle
+# ------------------------------------------------------------------------------
+
+def ref_ldexp_f32(src0: int, src1: int) -> int:
+    u = src0 & MASK32
+    e = (u >> EXP_SHIFT32) & EXP_MASK32
+    sgn = u & SIGN_BIT32
+
+    # Inf and NaN pass through
+    if e == 255:
+        return u
+    # Zero and denormals return signed zero
+    if e == 0:
+        return sgn
+
+    # Normal float: add clamped exponent
+    n = to_i32(src1)
+    if n < -512:
+        n = -512
+    elif n > 512:
+        n = 512
+
+    new_e = e + n
+    if 1 <= new_e <= 254:
+        return (u & 0x807F_FFFF) | (new_e << EXP_SHIFT32)
+    elif new_e > 254:
+        return sgn | POS_INF
+    else:
+        return sgn  # underflow to signed zero
+
+
+class TestLdexpF32Oracle(unittest.TestCase):
+    def test_basic_scaling(self):
+        # 0.5 * 2^2 = 2.0 (0x40000000)
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(0.5), 2), f32_to_bits(2.0))
+        # 1.0 * 2^-1 = 0.5 (0x3F000000)
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(1.0), -1), f32_to_bits(0.5))
+
+    def test_overflow_and_underflow(self):
+        # Overflow to +inf
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(1.0), 200), POS_INF)
+        # Underflow to +0.0
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(1.0), -200), POS_ZERO)
+        # Negative underflow to -0.0
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(-1.0), -200), NEG_ZERO)
+
+    def test_specials_invariance(self):
+        self.assertEqual(ref_ldexp_f32(POS_ZERO, 10), POS_ZERO)
+        self.assertEqual(ref_ldexp_f32(NEG_ZERO, 10), NEG_ZERO)
+        self.assertEqual(ref_ldexp_f32(POS_INF, -5), POS_INF)
+        self.assertEqual(ref_ldexp_f32(QNAN, 5), QNAN)
+
+
 if __name__ == '__main__':
     unittest.main()

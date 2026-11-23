@@ -81,7 +81,8 @@ def test_vs_input_survey():
     tool = os.path.join(ROOT, "scripts", "vs_input_survey.py")
 
     def cli(*args):
-        return subprocess.run([sys.executable, "-I", tool, *args], capture_output=True, text=True)
+        return subprocess.run([sys.executable, "-I", tool, *args],
+                              capture_output=True, text=True, errors="replace")
 
     with tempfile.TemporaryDirectory() as tmp:
         d = os.path.join(tmp, "dxbc")
@@ -147,10 +148,26 @@ def test_vs_input_survey_error_handling_and_json_guards():
             res = run(sub)
             check(res.returncode == 2 and "ERROR:" in res.stderr and "Traceback" not in res.stderr,
                   f"bad index.json ({label}) exits 2 with ERROR")
+            if label == "absent":
+                check("index.json" in res.stderr, "missing index.json names index.json in stderr")
 
         dx = build(os.path.join(tmp, "valid"))
         idx_path = os.path.join(dx, "index.json")
         asm_path = os.path.join(dx, "disasm", "a_vs.s")
+        hard_idx = os.path.join(tmp, "hard_index.json")
+        try:
+            os.link(idx_path, hard_idx)
+        except OSError:
+            hard_idx = None
+        if os.name != "nt" and (not hasattr(os, "geteuid") or os.geteuid() != 0):
+            os.chmod(asm_path, 0)
+            try:
+                unreadable = run(dx)
+                check(unreadable.returncode == 2 and "a_vs.s" in unreadable.stderr
+                      and "Traceback" not in unreadable.stderr,
+                      "unreadable listing names the listing path in stderr")
+            finally:
+                os.chmod(asm_path, 0o644)
         upper_case_dir = os.path.join(tmp, "upper_case")
         os.makedirs(os.path.join(upper_case_dir, "disasm", "sub"), exist_ok=True)
         with open(os.path.join(upper_case_dir, "index.json"), "w", encoding="utf-8") as f:
@@ -167,6 +184,7 @@ def test_vs_input_survey_error_handling_and_json_guards():
             (dx, os.path.join(dx, "disasm")),
             (upper_case_dir, upper_listing),
             (upper_case_dir, nested_listing),
+            *(((dx, hard_idx),) if hard_idx is not None else ()),
         ):
             before = None
             if os.path.isfile(target):

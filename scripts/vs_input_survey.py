@@ -109,14 +109,23 @@ def read_before_write(insns):
     return read_s, read_v
 
 
-def _same_output_path(first, second):
-    """True when writing ``second`` would truncate ``first`` (same path or hard link)."""
-    if os.path.normcase(os.path.realpath(first)) == os.path.normcase(os.path.realpath(second)):
-        return True
+def _matching_input(dxbc_dir, out_path):
+    """Return the protected input path that writing ``out_path`` would truncate, or ``None``."""
+    out_real = os.path.normcase(os.path.realpath(out_path))
     try:
-        return os.path.samefile(first, second)
+        out_stat = os.stat(out_path)
     except OSError:
-        return False
+        out_stat = None
+    for input_path in _protected_inputs(dxbc_dir):
+        if os.path.normcase(os.path.realpath(input_path)) == out_real:
+            return input_path
+        if out_stat is not None:
+            try:
+                if os.path.samestat(os.stat(input_path), out_stat):
+                    return input_path
+            except OSError:
+                pass
+    return None
 
 
 def _vs_names(dxbc_dir):
@@ -206,14 +215,17 @@ def main():
         if os.path.isdir(a.json):
             print(f"ERROR: --json is a folder, not a file: {a.json}", file=sys.stderr)
             return 2
-        for input_path in _protected_inputs(a.dxbc):
-            if _same_output_path(input_path, a.json):
-                print(f"ERROR: --json would overwrite the input {input_path}", file=sys.stderr)
-                return 2
+        collision = _matching_input(a.dxbc, a.json)
+        if collision is not None:
+            print(f"ERROR: --json would overwrite the input {collision}", file=sys.stderr)
+            return 2
     try:
         r = survey(a.dxbc)
     except (OSError, ValueError) as e:
-        print(f"ERROR: cannot survey {a.dxbc}: {getattr(e, 'strerror', None) or e}", file=sys.stderr)
+        strerror = getattr(e, "strerror", None)
+        filename = getattr(e, "filename", None)
+        detail = f"{strerror}: {filename}" if strerror and filename else (strerror or e)
+        print(f"ERROR: cannot survey {a.dxbc}: {detail}", file=sys.stderr)
         return 2
     m = r["markers"]
     print(f"{r['vertex_shaders']} vertex shaders ({r['missing_listings']} without a listing)")

@@ -537,7 +537,8 @@ another GPU. For the host side of the comparison tests, `LEONIDA_HOST_ADAPTER` p
 Unset, the host side is the adapter behind the layer's Vulkan device (`runtime/test/host_adapter.h`; `d3d12_buffer_tiles`
 by the layer's `GetAdapterLuid()`), so on a PC with two GPUs the layer is compared with its own GPU's driver.
 The GPU tools of `runtime/test/shaders` (`vk_compute_test`, `vk_harness`, ...) read it the same way through
-`vk_device_pick.h`, and fail with a message naming the filter when it matches no device.
+`vk_device_pick.h`, and fail with a message naming the filter when it matches no device. So do `vk_sandbox` and
+`vk_descriptor_bench`, whose `--device N` must then name a device the filter matches.
 
 Two test settings make the layer's standalone device look like a GPU with fewer Vulkan queues, so D3D12 queues share
 them (`docs/d3d12_vulkan.md` section 4.4) on any GPU: `LEONIDA_VK_MAX_QUEUES_PER_FAMILY=N` (1 to 16) creates at most

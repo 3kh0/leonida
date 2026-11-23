@@ -692,6 +692,22 @@ class SkinnedGlbTest(unittest.TestCase):
                     handle.write(data)
                 self._assert_one_line_error(self._run_cli(skeleton, component), path)
 
+    def test_cli_non_integer_gfx_off_is_one_error_line(self):
+        # A list/dict/non-numeric gfx_off used to raise TypeError/ValueError past main's (SkinError, OSError);
+        # 1e400 is an OverflowError, and bool/1.5 were silently coerced to 1 by int().
+        for i, bad in enumerate(([1, 2], {"x": 1}, "abc", 1e400, -1e400, True, 1.5)):
+            with self.subTest(bad=bad):
+                root = self._case_root(f"gfx_off_{i}")
+                skeleton = _skeleton_dir(root)
+                component = _component(root)
+                model = _read_model(component)
+                model["drawable"]["buffers"][0]["gfx_off"] = bad
+                _write_json(os.path.join(component, "model.json"), model)
+                result = self._run_cli(skeleton, component)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertIn("gfx_off", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,7 @@ inputs. A pristine pair (v0/v1 nothing writes) keeps the interpolated-input read
 Pipodi's straight-line scan over the corpus found the affected 213 PS (upper bound; issue #1218,
 comment 7076614458); the classification and counts are in docs/design.md's SHADER-177 row.
 """
+from pathlib import Path
 import struct
 import unittest
 
@@ -138,6 +139,25 @@ class ComputedIJ(unittest.TestCase):
         self.assertEqual(f"{w[0] & 0xFFFF:#06x}", "0x3c00")
         self.assertEqual(f"{w[1] & 0xFFFF:#06x}", "0x4000")
 
+    def test_f16_two_p2_can_share_one_partial_with_distinct_destinations(self):
+        attrs = {0: [(struct.unpack("<H", struct.pack("<e", value))[0], 0, 0, 0)
+                     for value in (0.5, 1.5, 2.5)]}
+        _, w = run(["v_mov_b32_e32 v0, 0.25", "v_mov_b32_e32 v1, 0.25", "v_mov_b32_e32 v5, 0.5",
+                    "v_interp_p1ll_f16 v2, v0, attr0.x", "v_interp_p2_f16 v3, v1, attr0.x, v2",
+                    "v_interp_p2_f16 v4, v5, attr0.x, v2", "exp mrt0 v3, v4, v3, v4 done vm", "s_endpgm"],
+                   attrs=attrs)
+        self.assertEqual(w, [0x3D00, 0x3F00, 0x3D00, 0x3F00])
+
+    def test_f16_two_p2_can_share_the_p1_partial(self):
+        attrs = {0: [(0, 0, z, 0) for z in (0x3C00, 0x4200, 0x4500)]}  # f16 values 1, 3, 5
+        _, w = run(["v_mov_b32_e32 v0, 0.25", "v_mov_b32_e32 v1, 0.5",
+                    "v_interp_p1ll_f16 v2, v0, attr0.z",
+                    "v_interp_p2_f16 v3, v1, attr0.z, v2",
+                    "v_mov_b32_e32 v1, 0",
+                    "v_interp_p2_f16 v4, v1, attr0.z, v2",
+                    "exp mrt0 v3, v4, v3, v4 done vm", "s_endpgm"], attrs=attrs)
+        self.assertEqual(w[:2], [0x4300, 0x3E00])  # 3.5 with J = 0.5, then 1.5 with J = 0.
+
     def test_pristine_pair_still_reads_the_interpolated_input(self):
         """A pair nothing writes keeps the single-lane model's own read: no PerVertexKHR, no %bary."""
         spv, w = run(["v_interp_p1_f32_e32 v2, v0, attr0.x", "v_interp_p2_f32_e32 v2, v1, attr0.x",
@@ -162,6 +182,72 @@ class ComputedIJ(unittest.TestCase):
                     "v_interp_p1_f32_e32 v3, v0, attr0.y", "v_interp_p2_f32_e32 v3, v1, attr0.y",
                     "exp mrt0 v2, v3, v2, v3 done vm", "s_endpgm"])
         self.assertEqual(floats(w[:2]), (2 * I, 0.0))
+
+    def test_p2_j_alias_reads_the_partial_written_by_p1(self):
+        for seed in ("v_mov_b32_e32 v4, v1", "v_mov_b32_e32 v1, 0.5", "v_mov_b32_e32 v1, 0"):
+            with self.subTest(seed=seed):
+                _, w = run([seed, "v_mov_b32_e32 v0, 0.25",
+                            "v_interp_p1_f32_e32 v1, v0, attr0.z",
+                            "v_interp_p2_f32_e32 v1, v1, attr0.z",
+                            "exp mrt0 v1, v1, v1, v1 done vm", "s_endpgm"])
+                # P1: 1 + (3 - 1) * 0.25 = 1.5. P2 uses 1.5 as both J and accumulator.
+                self.assertEqual(floats(w[:1]), (7.5,))
+
+    def test_p2_j_alias_fixture(self):
+        fixture = Path(__file__).with_name("fixtures") / "interp_f32_p2_alias.asm"
+        lines = fixture.read_text(encoding="ascii").splitlines()
+        spv, w = run(line for line in lines if line and not line.startswith(";"))
+        self.assertEqual(w, [0x40F00000] * 4)
+        # Between P1 and P2's stores, share the one read across J, the accumulator and EXEC preservation.
+        p2 = spv.split("OpStore %reg_v1 ")[-2]
+        self.assertEqual(p2.count("OpLoad %uint %reg_v1"), 1)
+
+    def test_p2_j_alias_obeys_each_steps_exec_mask(self):
+        masks = [0x80000005, 0x00000006, 0x00000003, 0x80000005]
+        for width, dest, p1_mask, p2_mask, lanes in (
+            (32, "exec_lo", "s0", "s2", (0, 1, 2, 3, 31)),
+            (64, "exec", "s[0:1]", "s[2:3]", (0, 1, 2, 3, 31, 32, 33, 34, 63)),
+        ):
+            mov = f"s_mov_b{width} {dest}, "
+            spv = support.translate_lines("ps_ij_alias_exec", [
+                "v_mov_b32_e32 v0, 0.25", "v_mov_b32_e32 v1, 0.5",
+                mov + p1_mask, "v_interp_p1_f32_e32 v1, v0, attr0.z",
+                mov + p2_mask, "v_interp_p2_f32_e32 v1, v1, attr0.z",
+                mov + "-1", "exp mrt0 v1, v1, v1, v1 done vm", "s_endpgm",
+            ])
+            inputs = support.varyings(spv, {0: ATTR0}, BARY)
+            for lane in lanes:
+                with self.subTest(wave=width, lane=lane):
+                    half, bit = divmod(lane, 32)
+                    p1_on = (masks[half] >> bit) & 1
+                    p2_on = (masks[half + 2] >> bit) & 1
+                    expected = ((0.5, 2.5), (1.5, 7.5))[p1_on][p2_on]
+                    w = support.mrt0_words(spv, inputs={**inputs, "%sg_lane": lane}, push_constants=masks)
+                    self.assertEqual(floats(w[:1]), (expected,))
+
+    def test_p2_j_alias_applies_modifiers_to_each_step(self):
+        for i, p1, p2, expected in (
+            ("0.25", "v_interp_p1_f32_e32 v1, v0, attr0.z", "v_interp_p2_f32_e64 v1, v1, attr0.z div:2", 3.75),
+            ("0.25", "v_interp_p1_f32_e32 v1, v0, attr0.z", "v_interp_p2_f32_e64 v1, -v1, attr0.z", -4.5),
+            ("0.25", "v_interp_p1_f32_e64 v1, -v0, attr0.z", "v_interp_p2_f32_e32 v1, v1, attr0.z", 2.5),
+            ("0.25", "v_interp_p1_f32_e64 v1, v0, attr0.z clamp", "v_interp_p2_f32_e32 v1, v1, attr0.z", 5.0),
+            ("-1.0", "v_interp_p1_f32_e32 v1, v0, attr0.z", "v_interp_p2_f32_e64 v1, |v1|, attr0.z", 3.0),
+            ("0.25", "v_interp_p1_f32_e32 v1, v0, attr0.z", "v_interp_p2_f32_e64 v1, v1, attr0.z clamp div:2", 1.0),
+        ):
+            with self.subTest(i=i, p1=p1, p2=p2):
+                _, w = run([f"v_mov_b32_e32 v0, {i}", "v_mov_b32_e32 v1, 0.5", p1, p2,
+                            "exp mrt0 v1, v1, v1, v1 done vm", "s_endpgm"])
+                self.assertEqual(floats(w[:1]), (expected,))
+
+    def test_p2_j_alias_keeps_fused_rounding_at_p1(self):
+        attrs = {0: [(0, 0, struct.unpack("<I", struct.pack("<f", z))[0], 0)
+                     for z in (-1.0, 2.0 ** -23, 0.0)]}
+        _, w = run(["v_mov_b32_e32 v0, 0x3f7ffffe", "v_mov_b32_e32 v1, 0",
+                    "v_interp_p1_f32_e32 v1, v0, attr0.z",
+                    "v_interp_p2_f32_e32 v1, v1, attr0.z",
+                    "exp mrt0 v1, v1, v1, v1 done vm", "s_endpgm"], attrs=attrs)
+        # P1 rounds (1 + 2**-23) * (1 - 2**-23) - 1 only once, giving -2**-46.
+        self.assertEqual(w[0], 0xa9000000)   # P2 doubles the partial to -2**-45.
 
     def test_conditional_overwrite_preserves_hardware_barycentrics_on_untaken_path(self):
         """When a branch conditionally overwrites v0, the untaken path must still interpolate with hardware (I, J)."""
@@ -263,6 +349,16 @@ class ComputedIJRefusals(unittest.TestCase):
                      "v_interp_p2_f32_e32 v2, v1, attr0.x",
                      "exp mrt0 v2, v2, v2, v2 done vm", "s_endpgm"],
                     "the p1 partial is rewritten between the ops")
+
+    def test_f32_pair_refuses_multiple_p2_writing_the_same_partial(self):
+        for first_j, second_j in (("v3", "v1"), ("v1", "v3")):
+            with self.subTest(first_j=first_j, second_j=second_j):
+                self.refuse(["v_mov_b32_e32 v0, 0.25", "v_mov_b32_e32 v3, 0.5",
+                             "v_interp_p1_f32_e32 v3, v0, attr0.z",
+                             f"v_interp_p2_f32_e32 v3, {first_j}, attr0.z",
+                             f"v_interp_p2_f32_e32 v3, {second_j}, attr0.z",
+                             "exp mrt0 v3, v3, v3, v3 done vm", "s_endpgm"],
+                            "the p1 partial is rewritten between the ops")
 
     def test_partial_read_between_the_ops(self):
         self.refuse(["v_mov_b32_e32 v0, 0", "v_mov_b32_e32 v1, 0",

@@ -73,6 +73,15 @@ class HarnessTests(unittest.TestCase):
         status, detail = ff.check("v_mac_f32", vals, [(0, {}), (1, {})], False, [])
         self.assertEqual(status, "match", detail)
 
+    def test_translated_omod_minus_zero_may_be_plus_zero(self):
+        # -|v6| * v2 underflows to -0, and mul:2 makes that +0 on the hardware with IEEE off (dev_omod_neg_zero), as
+        # the translator models for the legacy multiply (f32_fuzz --seed 8650020 --fma khr, program 1845).
+        vals = [0] * 9
+        vals[2], vals[6] = 0x0DA24260, 0x0ECF229E
+        status, detail = ff.check("v_mul_legacy_f32", vals, [(6, {"neg": True, "abs": True}), (2, {})], True,
+                                  ["mul:2"])
+        self.assertEqual(status, "match", detail)
+
     def test_output_modifiers_on_conversions(self):
         vals = [0x00007800] + [0] * 8
         for op, mods in (("v_cvt_f32_ubyte1", ["clamp"]), ("v_cvt_f32_u32", ["mul:4"]),

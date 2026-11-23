@@ -534,5 +534,57 @@ class TestVCubescF32IEEE754(unittest.TestCase):
         self.assertEqual(hw_res, one)
 
 
+class TestVCubescF32NegativeAndMutation(unittest.TestCase):
+    """Negative controls, syntax rejection, and mutation detection for v_cubesc_f32."""
+
+    def test_rejection_of_invalid_syntax(self):
+        lines_missing = [
+            "v_mov_b32 v1, 1.0",
+            "v_cubesc_f32 v0, v1",
+            "exp mrt0 v0, v0, v0, v0 done vm",
+            "s_endpgm",
+        ]
+        with self.assertRaises(Exception):
+            support.translate_lines("ps_cubesc_err", lines_missing)
+
+    def test_rejection_of_out_of_bounds_register(self):
+        with self.assertRaises(ValueError):
+            Operand(RegType.VGPR, 256)
+        with self.assertRaises(ValueError):
+            Operand(RegType.VGPR, -1)
+        with self.assertRaises(ValueError):
+            Operand(RegType.SGPR, 106)
+
+    def test_mutation_detection_inverted_tie_breaker(self):
+        # Mutated oracle where X wins ties over Y and Z
+        def bad_oracle_x_wins(x, y, z):
+            ax, ay, az = abs(x), abs(y), abs(z)
+            if ax >= ay and ax >= az:
+                return z if x < 0.0 else -z
+            elif ay >= az:
+                return x
+            else:
+                return -x if z < 0.0 else x
+
+        # For |x| == |y| == |z| (e.g. 2.0, 2.0, 2.0):
+        # Correct RDNA2 (Z wins): sc = x = 2.0
+        # Mutated (X wins): sc = -z = -2.0
+        self.assertNotEqual(ref_cubesc(2.0, 2.0, 2.0), bad_oracle_x_wins(2.0, 2.0, 2.0))
+
+    def test_mutation_detection_swapped_x_face_signs(self):
+        # Mutated oracle where +X selects +z and -X selects -z
+        def bad_oracle_x_signs(x, y, z):
+            ax, ay, az = abs(x), abs(y), abs(z)
+            if az >= ax and az >= ay:
+                return -x if z < 0.0 else x
+            elif ay >= ax:
+                return x
+            else:
+                return -z if x < 0.0 else z
+
+        # For (4.0, 1.0, 0.5): +X face, correct is -z = -0.5, mutated gives +0.5
+        self.assertNotEqual(ref_cubesc(4.0, 1.0, 0.5), bad_oracle_x_signs(4.0, 1.0, 0.5))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1463,8 +1463,9 @@ public:
     }
 
     // Ticks per second of the timestamps EndQuery writes: one tick is timestampPeriod nanoseconds. All D3D12
-    // queues of the device use the same timestampPeriod, a device property, so they share one frequency. E_FAIL when that queue has no
-    // timestamps (timestampValidBits 0), as D3D12 reports for a queue that does not support them.
+    // queues of the device use the same timestampPeriod, a device property, so they share one frequency.
+    // E_FAIL when that queue has no timestamps (timestampValidBits 0), as D3D12 reports for a queue that does
+    // not support them.
     HRESULT STDMETHODCALLTYPE GetTimestampFrequency(UINT64* frequency) override {
         if (!frequency) return E_INVALIDARG;
         const double period = context_.timestamp_period();

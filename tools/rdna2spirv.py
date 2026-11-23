@@ -69,6 +69,8 @@ FMA_EXACT = False        # --fma exact: fused multiply-adds are emulated from si
 # coordinate, so a per-pixel offset doesn't change the LOD. Gathers keep their Offset (shaderImageGatherExtended).
 TEXEL_OFFSET_FALLBACK = False
 FLOAT_CONTROLS = True    # False (--no-float-controls): no SignedZeroInfNanPreserve, for drivers without the property
+INT64_ATOMICS = True     # False (--no-int64-atomics): no Int64Atomics, for devices without shaderBufferInt64Atomics;
+                         # swap_x2 then falls back to one 32-bit exchange per dword (it can tear under contention)
 # --mesh-compute: mesh shaders become compute shaders (same workgroup size and code) for devices without
 # VK_EXT_mesh_shader. Instead of SetMeshOutputs and the mesh outputs, the epilogue writes the vertex and primitive
 # counts, each lane's vertex and each lane's primitive into this workgroup's slot of a buffer whose device address is
@@ -233,6 +235,7 @@ class Gen:
         self.f16_half_outs = {}     # VS/MS, --f16-interp-fallback: param n -> its two decoded-half output names
         self.ij_capture = {}        # computed-I/J pairs: pair key -> the I float id the p1 loaded (SHADER-177)
         self.uses_psb = False
+        self.uses_int64_atomics = False    # Int64Atomics (shaderBufferInt64Atomics)
         self.uses_active = False
         self.vm_latch = False      # PS: EXEC can change after a `vm` export, so that export's EXEC is kept
         self.uses_perm = False     # emulate: ds_permute_b32 parks its winning source lane in %x_perm
@@ -2129,16 +2132,56 @@ class Gen:
         self.emit(f"{old} = OpPhi %uint {cur} {lbl_exit} {self.cu(0)} {pre}")
         return old
 
+    def split64(self, v):
+        """(low, high) uint words of a %ulong."""
+        lo, sh, hi = self.tmp(), self.tmp(), self.tmp()
+        self.emit(f"{lo} = OpUConvert %uint {v}")
+        self.emit(f"{sh} = OpShiftRightLogical %ulong {v} %c64_32")
+        self.emit(f"{hi} = OpUConvert %uint {sh}")
+        return lo, hi
+
+    def atomic_swap64(self, addr, vals):
+        """swap_x2 as one 64-bit OpAtomicExchange on the element at Xbox address `addr` (Int64Atomics on a uint64
+        PhysicalStorageBuffer pointer; the device needs shaderBufferInt64Atomics). vals: the (low, high) DATA dwords.
+        Returns the old (low, high) dwords. The console swaps the element whole, so two lanes swapping into one element
+        at once each get back a pair some lane really wrote; one 32-bit exchange per dword (--no-int64-atomics) can
+        hand back A's low dword with B's high one (#4964 measured 96.7% of contended pairs torn on NVIDIA)."""
+        self.uses_int64_atomics = True
+        self.uses_psb = True
+        l64, h64, sh, d, p, r = (self.tmp() for _ in range(6))
+        self.emit(f"{l64} = OpUConvert %ulong {vals[0]}")
+        self.emit(f"{h64} = OpUConvert %ulong {vals[1]}")
+        self.emit(f"{sh} = OpShiftLeftLogical %ulong {h64} %c64_32")
+        self.emit(f"{d} = OpBitwiseOr %ulong {sh} {l64}")
+        self.emit(f"{p} = OpConvertUToPtr %_ptr_PSB_ulong {self.host_addr(addr)}")
+        self.emit(f"{r} = OpAtomicExchange %ulong {p} {self.cu(1)} {self.cu(0)} {d}")
+        return list(self.split64(r))
+
+    def atomic_x2_dwords(self, addr, kind, vals):
+        """The 64-bit element at Xbox address `addr` as two dwords (low first), one 32-bit atomic each: exact memory
+        for a bitwise op, whose bits are independent. Returns the old (low, high) dwords."""
+        ptr = self.tmp()
+        self.emit(f"{ptr} = OpConvertUToPtr %_ptr_PSB_arr {self.host_addr(addr)}")
+        res = []
+        for w in range(2):
+            p, r = self.tmp(), self.tmp()
+            self.emit(f"{p} = OpAccessChain %_ptr_PSB_uint {ptr} {self.cu(w)}")
+            self.emit(f"{r} = {self.BUF_ATOMICS[kind][0]} %uint {p} {self.cu(1)} {self.cu(0)} {vals[w]}")
+            res.append(r)
+        return res
+
     def global_atomic(self, op, a, mods):
         """global_atomic_<op> [vdst,] vaddr, vdata, saddr|off [offset:N] [glc]: a 32-bit atomic at the global_* address
         (RDNA2 ISA, FLAT/GLOBAL). With glc the pre-op value lands in vdst (the first operand); without it there is no
         vdst. cmpswap takes vdata as a pair {DATA, CMP}: M = (M == CMP) ? DATA : M. Inactive lanes don't touch memory
         and keep vdst; active unaligned lanes (addr % 4 != 0, or addr % 8 != 0 for _x2) leave memory untouched and
-        write 0 / (0, 0) to vdst (measured natively on gfx1036). and/or/xor/swap_x2 work on a 64-bit element (two
-        dwords, low first) as one 32-bit atomic per dword, with no Int64 atomics. That leaves the same memory for a
-        bitwise op, whose bits are independent, but not always for an exchange: two lanes swapping into one element at
-        once can leave one's low dword with the other's high dword (A.lo, B.lo, B.hi, A.hi). The returned pair is two
-        reads, so another lane's 64-bit op on the same element between them could be seen half done. The other _x2
+        write 0 / (0, 0) to vdst (measured natively on gfx1036). and/or/xor_x2 work on a 64-bit element (two dwords,
+        low first) as one 32-bit atomic per dword, with no Int64 atomics: that leaves the same memory for a bitwise op,
+        whose bits are independent. The returned pair is two reads, so another lane's 64-bit op on the same element
+        between them could be seen half done. swap_x2 is one 64-bit OpAtomicExchange (atomic_swap64, Int64Atomics), so
+        the element and the returned pair stay whole; with --no-int64-atomics it is one 32-bit exchange per dword, and
+        two lanes swapping into one element at once can leave one's low dword with the other's high dword (A.lo, B.lo,
+        B.hi, A.hi). The other _x2
         forms (add/sub/min/max carry or compare across the dwords, cmpswap_x2 compares all 64 bits) and inc/dec stay
         Unsupported."""
         kind = op[len("global_atomic_"):]
@@ -2207,7 +2250,8 @@ class Gen:
             self.dst(vdst, old)
 
     def global_atomic_x2(self, op, kind, a, mods):
-        """global_atomic_{and,or,xor,swap}_x2 (see global_atomic): one 32-bit atomic per dword of the element."""
+        """global_atomic_{and,or,xor,swap}_x2 (see global_atomic): one 32-bit atomic per dword of the element, except
+        swap_x2, which is one 64-bit exchange (atomic_swap64) unless --no-int64-atomics."""
         if any(m in mods for m in ("slc", "dlc", "lds")):
             raise Unsupported(op + " form")
         rtn = "glc" in mods
@@ -2219,7 +2263,6 @@ class Gen:
             raise Unsupported(op + " operands")
         full = self.global_address(op, vaddr, saddr, mods)
         vals = [self.load_reg("vgpr", vdata["r"] + w) for w in range(2)]
-        spv = self.BUF_ATOMICS[kind][0]
         al = self.atomic_aligned(full, 8)
         cond = self.tmp()
         self.emit(f"{cond} = OpLogicalAnd %bool {self.active_b()} {al}")
@@ -2228,14 +2271,10 @@ class Gen:
         self.emit(f"OpSelectionMerge {lbl_end} None")
         self.emit(f"OpBranchConditional {cond} {lbl_do} {lbl_end}")
         self.emit(f"{lbl_do} = OpLabel")
-        ptr = self.tmp()
-        self.emit(f"{ptr} = OpConvertUToPtr %_ptr_PSB_arr {self.host_addr(full)}")
-        res = []
-        for w in range(2):
-            p, r = self.tmp(), self.tmp()
-            self.emit(f"{p} = OpAccessChain %_ptr_PSB_uint {ptr} {self.cu(w)}")
-            self.emit(f"{r} = {spv} %uint {p} {self.cu(1)} {self.cu(0)} {vals[w]}")
-            res.append(r)
+        if kind == "swap" and INT64_ATOMICS:
+            res = self.atomic_swap64(full, vals)
+        else:
+            res = self.atomic_x2_dwords(full, kind, vals)
         self.emit(f"OpBranch {lbl_end}")
         self.emit(f"{lbl_end} = OpLabel")
         olds = []
@@ -2317,11 +2356,12 @@ class Gen:
 
     def buffer_atomic_x2(self, op, kind, a, mods):
         """buffer_atomic_{and,or,xor,swap}_x2 vdata[0:1], vaddr, s[V#], soffset: M = op(M, DATA) on the 64-bit element
-        (two dwords, low first); with glc the old 64 bits are returned in vdata. Each dword is its own 32-bit atomic, so
-        no Int64 atomics are needed. That leaves the same memory for a bitwise op, whose bits are independent, but an
-        exchange can tear: two lanes swapping into one element at once can leave one's low dword with the other's high
-        dword (A.lo, B.lo, B.hi, A.hi). The returned pair is two reads, so another lane's 64-bit op on the same element
-        between them could be seen half done. Measured natively on RDNA2 (gfx1036, wave32 & wave64): the bounds check
+        (two dwords, low first); with glc the old 64 bits are returned in vdata. For and/or/xor each dword is its own
+        32-bit atomic, so no Int64 atomics are needed: that leaves the same memory for a bitwise op, whose bits are
+        independent. The returned pair is two reads, so another lane's 64-bit op on the same element between them could
+        be seen half done. swap_x2 is one 64-bit exchange (atomic_swap64), whole like the console's; with
+        --no-int64-atomics it is one 32-bit exchange per dword, which can tear when two lanes swap into one element at
+        once (A.lo, B.lo, B.hi, A.hi). Measured natively on RDNA2 (gfx1036, wave32 & wave64): the bounds check
         covers the whole 8-byte element all or nothing (fixed_fmt=62) and addresses with (addr & 7) != 0 are dropped
         (memory untouched, active glc returns (0, 0), inactive preserves vdata)."""
         vd = a[0]
@@ -2338,14 +2378,10 @@ class Gen:
         self.emit(f"OpSelectionMerge {lbl_end} None")
         self.emit(f"OpBranchConditional {cond} {lbl_do} {lbl_end}")
         self.emit(f"{lbl_do} = OpLabel")
-        ptr = self.tmp()
-        self.emit(f"{ptr} = OpConvertUToPtr %_ptr_PSB_arr {self.host_addr(addr)}")
-        res = []
-        for w in range(2):
-            p, r = self.tmp(), self.tmp()
-            self.emit(f"{p} = OpAccessChain %_ptr_PSB_uint {ptr} {self.cu(w)}")
-            self.emit(f"{r} = {self.BUF_ATOMICS[kind][0]} %uint {p} {self.cu(1)} {self.cu(0)} {vals[w]}")
-            res.append(r)
+        if kind == "swap" and INT64_ATOMICS:
+            res = self.atomic_swap64(addr, vals)
+        else:
+            res = self.atomic_x2_dwords(addr, kind, vals)
         self.emit(f"OpBranch {lbl_end}")
         self.emit(f"{lbl_end} = OpLabel")
         olds = []
@@ -12807,6 +12843,8 @@ def assemble(gen):
         caps += [c for c in ("GroupNonUniform", "GroupNonUniformQuad") if c not in caps]
     if gen.uses_f64:
         caps.append("Float64")
+    if gen.uses_int64_atomics:
+        caps.append("Int64Atomics")
     if gen.uses_fma_khr:
         caps.append("FMAKHR")
     if gen.uses_clock:
@@ -12958,6 +12996,8 @@ def assemble(gen):
         types += ["%ulong = OpTypeInt 64 0", "%c64_32 = OpConstant %ulong 32", "%long = OpTypeInt 64 1",
                   "%rt_uint = OpTypeRuntimeArray %uint", "%_ptr_PSB_arr = OpTypePointer PhysicalStorageBuffer %rt_uint",
                   "%_ptr_PSB_uint = OpTypePointer PhysicalStorageBuffer %uint"]
+        if gen.uses_int64_atomics:
+            types.append("%_ptr_PSB_ulong = OpTypePointer PhysicalStorageBuffer %ulong")
         dec.append("OpDecorate %rt_uint ArrayStride 4")
         types += [f"{name} = OpConstant %ulong {v}" for v, name in sorted(gen.lconsts.items())]
     if tex:
@@ -15512,7 +15552,8 @@ def shader_meta(g, asm, src_path=None, fssm_path=None):
              "ClipDistance": "shaderClipDistance", "CullDistance": "shaderCullDistance",
              "ShaderLayer": "shaderOutputLayer", "ShaderViewportIndex": "shaderOutputViewportIndex",
              "DrawParameters": "shaderDrawParameters",
-             "FMAKHR": "shaderFmaFloat32"}     # VkPhysicalDeviceShaderFmaFeaturesKHR (VK_KHR_shader_fma)
+             "FMAKHR": "shaderFmaFloat32",     # VkPhysicalDeviceShaderFmaFeaturesKHR (VK_KHR_shader_fma)
+             "Int64Atomics": "shaderBufferInt64Atomics"}
     m = {"stage": g.stage, "wave64": bool(g.wave64), "control_flow": getattr(g, "control_flow", "straight line"),
          "capabilities": caps, "extensions": exts,
          "features": sorted({feats[c] for c in caps if c in feats and not feats[c].startswith(("core", "shaderImage1D"))} |
@@ -15861,6 +15902,9 @@ def main():
                     help="optional dir with <name>.fssm sidecars: records fssm_sha256 per shader in the index")
     ap.add_argument("--dispatch-loop", action="store_true",
                     help="emit control flow the old way, as one loop around a switch (to compare with the default)")
+    ap.add_argument("--no-int64-atomics", action="store_true",
+                    help="no Int64Atomics, for a device without shaderBufferInt64Atomics: buffer/global swap_x2 "
+                         "becomes one 32-bit exchange per dword, which can tear when two lanes swap one element")
     ap.add_argument("--no-float-controls", action="store_true",
                     help="don't declare SignedZeroInfNanPreserve or DenormPreserve (for a driver whose "
                          "shaderSignedZeroInfNanPreserveFloat32 or shaderDenormPreserveFloat16 is false); NaN, inf, "
@@ -15930,8 +15974,9 @@ def main():
     FMA_KHR = a.fma == "khr"
     FMA_EXACT = a.fma == "exact"
     STRUCTURED = not a.dispatch_loop
-    global FLOAT_CONTROLS
+    global FLOAT_CONTROLS, INT64_ATOMICS
     FLOAT_CONTROLS = not a.no_float_controls
+    INT64_ATOMICS = not a.no_int64_atomics
     WAVE64_EMULATE = a.wave64_emulate
     WAVE64_GRAPHICS = a.wave64_graphics
     BARY_FALLBACK = a.bary_fallback

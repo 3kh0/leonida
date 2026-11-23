@@ -577,6 +577,70 @@ def dump_test(tools, spirv, name, want, words, env=None):
     return ""
 
 
+# cs_w32_swap_x2_whole.asm (SHADER-868): 64 groups of 32 invocations each swap their own pair into four shared 64-bit
+# elements (global and buffer swap_x2, with and without glc). The heap is the global glc returns (words 0..4095), the
+# buffer glc returns (4096..8191), then the four elements (8192..8199), which start as the fill.
+SWAP_X2_WHOLE_GROUPS, SWAP_X2_WHOLE_LOCAL = 64, 32
+SWAP_X2_WHOLE_INVOCATIONS = SWAP_X2_WHOLE_GROUPS * SWAP_X2_WHOLE_LOCAL
+SWAP_X2_WHOLE_ELEMENTS = 2 * 2 * SWAP_X2_WHOLE_INVOCATIONS    # the first element's word
+SWAP_X2_WHOLE_WORDS = SWAP_X2_WHOLE_ELEMENTS + 16
+SWAP_X2_WHOLE_FORMS = ("global glc", "buffer glc", "global", "buffer")
+
+
+def swap_x2_whole_pair(form, i):
+    """The pair invocation i swaps in with form `form` (an index into SWAP_X2_WHOLE_FORMS): the high dword is the low
+    one inverted, so the halves belong together."""
+    low = (0x51 + form) << 24 | i
+    return low, low ^ 0xFFFFFFFF
+
+
+def swap_x2_whole_words(words, invocations=SWAP_X2_WHOLE_INVOCATIONS):
+    """What one dispatch of cs_w32_swap_x2_whole left in the heap: "" when every swap took the element whole, else
+    what went wrong. For a glc form the returned pairs plus the element's final pair must be the fill pair plus every
+    replacement pair, each exactly once (a torn pair is neither, and leaves a replacement out); an element without glc
+    must end as one replacement pair."""
+    if len(words) < SWAP_X2_WHOLE_ELEMENTS + 8:
+        return f"the dump has {len(words)} words, expected at least {SWAP_X2_WHOLE_ELEMENTS + 8}"
+    problems = []
+    fill = (0xEEEEEEEE, 0xEEEEEEEE)
+    for form, label in enumerate(SWAP_X2_WHOLE_FORMS):
+        e = SWAP_X2_WHOLE_ELEMENTS + 2 * form
+        final = (words[e], words[e + 1])
+        written = {swap_x2_whole_pair(form, i) for i in range(invocations)}
+        if form >= 2:
+            if final not in written:
+                problems.append(f"{label}: the element ends as {final[0]:#010x} {final[1]:#010x}, no pair written")
+            continue
+        base = 2 * invocations * form
+        pairs = [(words[base + 2 * i], words[base + 2 * i + 1]) for i in range(invocations)] + [final]
+        torn = sum(pair != fill and pair not in written for pair in pairs)
+        got = collections.Counter(pairs)
+        twice = sum(n - 1 for n in got.values() if n > 1)
+        never = len((written | {fill}) - set(got))
+        if torn or twice or never:
+            problems.append(f"{label}: {torn} of {len(pairs)} pairs torn, {twice} handed out twice, "
+                            f"{never} never handed out")
+    return "; ".join(problems)
+
+
+def swap_x2_whole_test(tools, spirv, env=None):
+    """One dispatch of cs_w32_swap_x2_whole, judged by swap_x2_whole_words; a Skip when vk_compute_test can't run it
+    on this device (no shaderBufferInt64Atomics: exit 77)."""
+    with tempfile.TemporaryDirectory(prefix="leonida-swap-x2-whole-") as tmp:
+        dump = Path(tmp) / "out.bin"
+        child = dict(os.environ if env is None else env, VKC_DUMP=str(dump), VKC_OUT_WORDS=str(SWAP_X2_WHOLE_WORDS))
+        code, out = run(os.path.join(tools, "vk_compute_test" + EXE), os.path.join(spirv, "cs_w32_swap_x2_whole.spv"),
+                        str(SWAP_X2_WHOLE_GROUPS), "dump", env=child)
+        if code == 77:
+            return Skip("SKIP (" + (out.strip().splitlines() or ["unsupported"])[-1] + ")")
+        if code:
+            return failure(code, out, 3)
+        if not dump.is_file():
+            return "no VKC_DUMP file written"
+        data = dump.read_bytes()
+    return swap_x2_whole_words(list(struct.unpack(f"<{len(data) // 4}I", data[:len(data) // 4 * 4])))
+
+
 def fmt_1010102_test(tools, spirv, env=None):
     """Check both packed stores and the untouched tail of a single group's 64 words."""
     return dump_test(tools, spirv, "cs_fmt_1010102", FMT_1010102_WORDS + [0xEEEEEEEE] * 48, 64, env)
@@ -1551,6 +1615,7 @@ def main():
                                                   expected_words=USER_SGPRS_WORDS, env=USER_SGPRS_ENV)))
     results.append(("cs_heap_init", compute_test(tools, spirv, "cs_heap_init", "1", "dump",
                                                  expected_words=HEAP_INIT_EXPECTED, env=heap_init_env())))
+    results.append(("cs_w32_swap_x2_whole", swap_x2_whole_test(tools, spirv)))
     results.append(("cs_cvt_f32_sat", cvt_f32_sat_test(tools, spirv)))
     results.append(("cs_fma_fused", fma_fused_test(tools, spirv)))
     results.append(("cs_cvt_pk_u8", compute_test(tools, spirv, "cs_cvt_pk_u8", "1", "dump",

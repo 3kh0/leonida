@@ -463,5 +463,48 @@ class TestFrexpExpI32F32RejectionAndHardwareTranslator(unittest.TestCase):
             self.assertEqual(words[0], expected, f"Failed on {src_val:#x}: got {words[0]:#x}, expected {expected:#x}")
 
 
+# ------------------------------------------------------------------------------
+# v_frexp_mant_f32 Reference Oracle
+# ------------------------------------------------------------------------------
+
+def ref_frexp_mant_f32(src: int) -> int:
+    u = src & MASK32
+    e = (u >> EXP_SHIFT32) & EXP_MASK32
+    if 1 <= e <= 254:
+        # Biased exponent set to 126, preserving sign and mantissa bits
+        return (u & 0x807F_FFFF) | 0x3F00_0000
+    elif e == 0:
+        # Zero and denormals return +-0
+        return u & SIGN_BIT32
+    else:
+        # Inf and NaNs pass through unchanged
+        return u
+
+
+class TestFrexpMantF32Oracle(unittest.TestCase):
+    def test_powers_of_two(self):
+        # 1.0f -> 0.5f (0x3F000000)
+        self.assertEqual(ref_frexp_mant_f32(f32_to_bits(1.0)), f32_to_bits(0.5))
+        # 2.0f -> 0.5f (0x3F000000)
+        self.assertEqual(ref_frexp_mant_f32(f32_to_bits(2.0)), f32_to_bits(0.5))
+        # 0.25f -> 0.5f (0x3F000000)
+        self.assertEqual(ref_frexp_mant_f32(f32_to_bits(0.25)), f32_to_bits(0.5))
+
+    def test_negative_normals_preserve_sign(self):
+        # -1.0f -> -0.5f (0xBF000000)
+        self.assertEqual(ref_frexp_mant_f32(f32_to_bits(-1.0)), f32_to_bits(-0.5))
+        # -4.0f -> -0.5f (0xBF000000)
+        self.assertEqual(ref_frexp_mant_f32(f32_to_bits(-4.0)), f32_to_bits(-0.5))
+
+    def test_special_cases(self):
+        self.assertEqual(ref_frexp_mant_f32(POS_ZERO), POS_ZERO)
+        self.assertEqual(ref_frexp_mant_f32(NEG_ZERO), NEG_ZERO)
+        self.assertEqual(ref_frexp_mant_f32(POS_INF), POS_INF)
+        self.assertEqual(ref_frexp_mant_f32(NEG_INF), NEG_INF)
+        self.assertEqual(ref_frexp_mant_f32(QNAN), QNAN)
+        self.assertEqual(ref_frexp_mant_f32(0x0000_0001), POS_ZERO)
+        self.assertEqual(ref_frexp_mant_f32(0x8000_0001), NEG_ZERO)
+
+
 if __name__ == '__main__':
     unittest.main()

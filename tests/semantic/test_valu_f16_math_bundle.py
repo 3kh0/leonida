@@ -393,5 +393,16 @@ class VLdexpF16SimdDivergenceTests(unittest.TestCase):
             else:
                 self.assertEqual(wave.get_vgpr(i), 0xAAAA)
 
+class VLdexpF16EdgeCasesTests(unittest.TestCase):
+    def test_ldexp_overflow(self):
+        # 1.0 * 2^50 -> overflow to +inf
+        self.assertEqual(oracle_ldexp_f16(F16_POS_ONE, 50), F16_POS_INF)
+        # -1.0 * 2^50 -> overflow to -inf
+        self.assertEqual(oracle_ldexp_f16(F16_NEG_ONE, 50), F16_NEG_INF)
+
+    def test_ldexp_underflow(self):
+        # 1.0 * 2^-50 -> underflow to zero
+        self.assertEqual(oracle_ldexp_f16(F16_POS_ONE, -50 & MASK16), F16_POS_ZERO)
+
 if __name__ == "__main__":
     unittest.main()

@@ -118,6 +118,26 @@ class TestVFmaF32SIMDDivergence(unittest.TestCase):
                 words = run_bundle_ps(lines, f"ps_simd_fma_{s0:#x}")
                 self.assertEqual(words[0], expected)
 
+class TestVFmaF32IEEEEdgeCases(unittest.TestCase):
+    """Stage 4 for v_fma_f32: IEEE 754 boundary extremes and zeros."""
+
+    def test_v_fma_f32_edge_cases(self):
+        cases = [
+            (0x00000000, 0x3F800000, 0x40000000, 0x40000000),  # 0.0 * 1.0 + 2.0 = 2.0
+            (0x3F800000, 0xBF800000, 0x3F800000, 0x00000000),  # 1.0 * -1.0 + 1.0 = 0.0
+            (0xC0000000, 0xC0400000, 0xC0C00000, 0x00000000),  # -2.0 * -3.0 + -6.0 = 0.0
+        ]
+        for s0, s1, s2, expected in cases:
+            with self.subTest(s0=hex(s0), s1=hex(s1), s2=hex(s2)):
+                lines = [
+                    f"v_mov_b32 v1, {s0:#x}",
+                    f"v_mov_b32 v2, {s1:#x}",
+                    f"v_mov_b32 v3, {s2:#x}",
+                    "v_fma_f32 v0, v1, v2, v3",
+                ]
+                words = run_bundle_ps(lines, f"ps_ieee_fma_{s0:#x}")
+                self.assertEqual(words[0], expected)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -202,5 +202,80 @@ class TestSaluOrn2SaveexecB64AST(unittest.TestCase):
             inst.validate()
 
 
+
+
+class ScalarRegisterState:
+    """Simulated state of GCN/RDNA Scalar Registers (SGPRs, EXEC, and SCC)."""
+
+    def __init__(self, exec_mask: int = ALL_LANES_ACTIVE):
+        self.sgpr = [0] * 106
+        self.exec_mask = u64(exec_mask)
+        self.scc = 0
+
+    def get_sgpr_64(self, index: int) -> int:
+        if index % 2 != 0 or index + 1 >= len(self.sgpr):
+            raise ValueError(f"Invalid SGPR pair index: s{index}")
+        lo = self.sgpr[index] & MASK32
+        hi = self.sgpr[index + 1] & MASK32
+        return (hi << 32) | lo
+
+    def set_sgpr_64(self, index: int, val: int) -> None:
+        if index % 2 != 0 or index + 1 >= len(self.sgpr):
+            raise ValueError(f"Invalid SGPR pair index: s{index}")
+        v = u64(val)
+        self.sgpr[index] = v & MASK32
+        self.sgpr[index + 1] = (v >> 32) & MASK32
+
+    def execute(self, inst: ASTInstruction) -> None:
+        inst.validate()
+        # Read source operand
+        if inst.src0.kind == OperandKind.SGPR:
+            src_val = self.get_sgpr_64(inst.src0.index)
+        elif inst.src0.kind == OperandKind.EXEC:
+            src_val = self.exec_mask
+        elif inst.src0.kind in (OperandKind.LITERAL64, OperandKind.INLINE_CONST):
+            src_val = inst.src0.value
+        else:
+            raise ValueError(f"Unsupported operand kind for scalar execution: {inst.src0.kind}")
+
+        new_exec, sdst, scc = ref_orn2_saveexec_b64(src_val, self.exec_mask)
+        if inst.dst.kind == OperandKind.SGPR:
+            self.set_sgpr_64(inst.dst.index, sdst)
+
+        self.exec_mask = new_exec
+        self.scc = scc
+
+
+class TestSaluOrn2SaveexecB64ScalarInterpreter(unittest.TestCase):
+    """Test suite for deterministic scalar instruction execution."""
+
+    def test_scalar_interpreter_basic_execution(self):
+        state = ScalarRegisterState(exec_mask=0x00000000FFFFFFFF)
+        state.set_sgpr_64(6, 0x1122334455667788)
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(4, 2),
+            src0=ASTOperand.sgpr(6, 2),
+        )
+        state.execute(inst)
+        self.assertEqual(state.get_sgpr_64(4), 0x00000000FFFFFFFF)
+        expected_new_exec = 0x1122334455667788 | (~0x00000000FFFFFFFF & MASK64)
+        self.assertEqual(state.exec_mask, expected_new_exec)
+        self.assertEqual(state.scc, 1)
+
+    def test_scalar_interpreter_literal_source(self):
+        state = ScalarRegisterState(exec_mask=0xF0F0F0F00F0F0F0F)
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(0, 2),
+            src0=ASTOperand.literal64(0x0000FFFF0000FFFF),
+        )
+        state.execute(inst)
+        self.assertEqual(state.get_sgpr_64(0), 0xF0F0F0F00F0F0F0F)
+        expected = 0x0000FFFF0000FFFF | (~0xF0F0F0F00F0F0F0F & MASK64)
+        self.assertEqual(state.exec_mask, expected)
+        self.assertEqual(state.scc, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

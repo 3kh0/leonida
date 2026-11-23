@@ -57,6 +57,18 @@ class TestChecks(unittest.TestCase):
         self.assertEqual(r["pairs"], {"0": [0, 1]})
         self.assertFalse(r["consistent"])
 
+    def test_a_one_shot_iterable_is_checked_like_a_list(self):
+        # BUILD-1552: check() handed `geometries` to rehydrate() and then took list(geometries) for the pair
+        # check, so an iterator arrived there empty, every pair was skipped, and the check passed.
+        src, _, _ = build(LEAVES, bounds=BOUNDS)
+        loose = R.Geometry(VB + struct.pack("<6f", 1, 1, 0, 1, 1, 0), indices=struct.pack("<6I", 0, 1, 2, 3, 4, 5))
+        r = C.check(src, iter([loose]))
+        self.assertEqual(r["pairs"], {"0": [0, 1]})
+        self.assertFalse(r["consistent"])
+        r = C.check(src, (g for g in [TRUE]))
+        self.assertEqual(r["pairs"], {"0": [1, 1]})
+        self.assertTrue(r["consistent"], r)
+
     def test_overrides(self):
         tight = build([(0, 0x01, 0, None, 0x09), (0, 0x01, 1, None, 0x09)], overrides={6: 0.25}, bounds=BOUNDS)[0]
         self.assertEqual(C.check(tight, [TRUE])["overrides_consistent"], 1)

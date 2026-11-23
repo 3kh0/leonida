@@ -491,6 +491,16 @@ class Module:
         next_location = base_location
         for child, member in zip(args, member_decs):
             self.check_modes(member)
+            if DEC_PER_VERTEX in member:
+                if (stage, storage) != ("ps", STORAGE_INPUT):
+                    raise InterfaceError("PerVertexKHR is only supported on fragment inputs")
+                # A member's outer vertex array is outside the linked payload,
+                # just as for a PerVertexKHR decoration on the whole variable.
+                child_opcode, child_args = self.type_declaration(child)
+                if child_opcode != OP_TYPE_ARRAY:
+                    raise InterfaceError(f"{stage} requires an outer per-vertex or per-primitive array")
+                child = child_args[0]
+                indexed = True
             address = self.address(member, next_location)
             shape = self.shape(child, (type_id,))
             members.append(Varying(address, shape, per_primitive or DEC_PER_PRIMITIVE in member))

@@ -2582,7 +2582,7 @@ def write_outputs(out_path, docs, pools):
         if os.path.isdir(out_path):
             raise CliError(f"--out {out_path} is an existing directory")
         for p in pools:
-            if _ttpf.same_output_path(out_path, p):
+            if _ttpf.same_report_path(out_path, p):
                 raise CliError(f"--out would overwrite input pool {p}")
         _write_json_deterministic(out_path, docs)
         return [out_path]
@@ -2593,7 +2593,7 @@ def write_outputs(out_path, docs, pools):
     for ckey in sorted(docs.keys()):
         target = os.path.join(out_path, f"{ckey}.json")
         for p in pools:
-            if _ttpf.same_output_path(target, p):
+            if _ttpf.same_report_path(target, p):
                 raise CliError(f"--out would overwrite input pool {p}")
         _write_json_deterministic(target, docs[ckey])
         written.append(target)

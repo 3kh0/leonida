@@ -33,6 +33,7 @@ HELPERS = {
     "gamedata_index": None,
     "navmesh_decode": "same_report_path",
     "world_census": "same_report_path",
+    "ttpf_mips": "same_report_path",
 }
 
 

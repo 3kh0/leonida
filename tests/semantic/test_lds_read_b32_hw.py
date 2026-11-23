@@ -137,5 +137,57 @@ class TestASTDefinitions(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_ds_read_b32("ds_read_b32 v0, s1")
 
+class ScalarState:
+    def __init__(self, lds_size: int = LDS_DEFAULT_SIZE) -> None:
+        self.vgprs = [0] * 256
+        self.sgprs = [0] * 106
+        self.lds = bytearray(lds_size)
+        self.lds_size = lds_size
+        self.exec_lo = 0xFFFFFFFF
+        self.exec_hi = 0xFFFFFFFF
+        self.scc = 0
+        self.vcc_lo = 0
+        self.vcc_hi = 0
+
+    def write_lds_u32(self, addr: int, val: int) -> None:
+        eff = addr % self.lds_size
+        for k in range(4):
+            self.lds[(eff + k) % self.lds_size] = (val >> (k * 8)) & 0xFF
+
+    def step(self, inst: DSReadB32Inst) -> None:
+        if (self.exec_lo & 1) == 0:
+            return
+        addr = self.vgprs[inst.vaddr.index]
+        res = ds_read_b32_ref(self.lds, addr, inst.offset, self.lds_size)
+        self.vgprs[inst.vdst.index] = res
+
+
+class TestScalarInterpreter(unittest.TestCase):
+    def setUp(self) -> None:
+        self.state = ScalarState()
+
+    def test_scalar_read_execution(self) -> None:
+        self.state.write_lds_u32(0x80, 0xCAFEBABE)
+        self.state.vgprs[1] = 0x80
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 4), RegSingle(RegType.VGPR, 1))
+        self.state.step(inst)
+        self.assertEqual(self.state.vgprs[4], 0xCAFEBABE)
+
+    def test_scalar_read_with_offset(self) -> None:
+        self.state.write_lds_u32(0x88, 0x12345678)
+        self.state.vgprs[2] = 0x80
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 5), RegSingle(RegType.VGPR, 2), offset=8)
+        self.state.step(inst)
+        self.assertEqual(self.state.vgprs[5], 0x12345678)
+
+    def test_scalar_inactive_exec(self) -> None:
+        self.state.exec_lo = 0
+        self.state.vgprs[1] = 0x80
+        self.state.vgprs[4] = 0x11111111
+        self.state.write_lds_u32(0x80, 0x22222222)
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 4), RegSingle(RegType.VGPR, 1))
+        self.state.step(inst)
+        self.assertEqual(self.state.vgprs[4], 0x11111111)
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TOOLS = os.path.join(ROOT, "tools")
@@ -84,6 +85,74 @@ class TestBatchGlb(unittest.TestCase):
                 glb_file = os.path.join(out_dir, f"test_model_{i}.glb")
                 self.assertTrue(os.path.isfile(glb_file))
                 self.assertGreater(os.path.getsize(glb_file), 100)
+
+    def test_png_loader_checks_signature_and_ihdr_framing(self) -> None:
+        png = dds_png.dds_to_png_bytes(_create_minimal_bc1_dds())
+        invalid = {
+            "html": b"<html>texture download failed</html>" * 2,
+            "signature": b"not PNG!" + png[8:],
+            "signature_only": png[:8],
+            "truncated_ihdr": png[:32],
+            "wrong_chunk": png[:12] + b"IDAT" + png[16:],
+            "wrong_length": png[:8] + struct.pack(">I", 12) + png[12:],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "texture.png"
+            for name, data in invalid.items():
+                with self.subTest(name=name):
+                    path.write_bytes(data)
+                    decoded, reason = batch_glb._load_png_bytes(str(path))
+                    self.assertIsNone(decoded)
+                    self.assertIn("PNG", reason)
+            path.write_bytes(png)
+            self.assertEqual(batch_glb._load_png_bytes(str(path)), (png, ""))
+
+    def test_bad_png_header_is_reported_once_while_cli_exports_geometry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, out, textures = root / "obj", root / "glb", root / "textures"
+            source.mkdir()
+            textures.mkdir()
+            (source / "panel.obj").write_text(
+                "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\n"
+                "usemtl paint\ng first\nf 1/1 2/2 3/3\ng second\nf 1/1 2/2 3/3\n",
+                encoding="utf-8", newline="\n",
+            )
+            invalid = b"<html>texture download failed</html>" * 2
+            (textures / "paint.png").write_bytes(invalid)
+            result = subprocess.run(
+                [sys.executable, "-I", os.path.join(TOOLS, "batch_glb.py"), str(source), str(out),
+                 "--textures", str(textures), "--jobs", "2"], capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.count("not embedded"), 1)
+            self.assertIn("paint.png", result.stdout)
+            self.assertIn("1 unembedded texture", result.stdout)
+            self.assertEqual(result.stderr, "")
+            data = (out / "panel.glb").read_bytes()
+            gltf = batch_glb.glb_writer.read_glb_summary(data)["json"]
+            self.assertEqual(sum(len(mesh["primitives"]) for mesh in gltf["meshes"]), 2)
+            self.assertNotIn("images", gltf)
+            self.assertNotIn(invalid, data)
+
+    def test_bad_png_is_cached_across_worker_models(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source, out, textures = root / "obj", root / "glb", root / "textures"
+            source.mkdir()
+            textures.mkdir()
+            for name in ("first", "second"):
+                (source / f"{name}.obj").write_text(
+                    "v 0 0 0\nv 1 0 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 0 1\n"
+                    "usemtl paint\nf 1/1 2/2 3/3\n", encoding="utf-8", newline="\n",
+                )
+            (textures / "paint.png").write_bytes(b"not a PNG")
+            with mock.patch.object(batch_glb, "_load_png_bytes", wraps=batch_glb._load_png_bytes) as load:
+                stats = batch_glb.batch_convert(str(source), str(out), texture_dir=str(textures), jobs=2)
+            self.assertEqual(load.call_count, 1)
+            self.assertEqual((stats["succeeded"], stats["failed"]), (2, 0))
+            self.assertEqual(len(stats["dropped_textures"]), 2)
+            self.assertTrue(all("PNG" in reason for _, _, reason in stats["dropped_textures"]))
 
     def test_batch_convert_with_png_texture(self) -> None:
         with tempfile.TemporaryDirectory() as in_dir, \

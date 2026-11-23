@@ -572,11 +572,11 @@ bool pc_pipeline_stop(const Call& c, unsigned slot62_calls, HRESULT slot62_hr) {
     return c.faulted && c.code == EXCEPTION_ACCESS_VIOLATION && slot62_calls > 0 && FAILED(slot62_hr);
 }
 
-bool dispatch_stop_allowed(const Call& c, bool /*on_vulkan*/, unsigned slot62_calls, HRESULT slot62_hr,
+bool dispatch_stop_allowed(const Call& c, bool on_vulkan, unsigned slot62_calls, HRESULT slot62_hr,
                            unsigned formatted) {
     // CreateRootSignature is implemented on the Vulkan device now. An access violation there is a real crash, not
     // evidence of the old unimplemented-slot stop; only the PC device's measured null-pipeline stop is allowed.
-    const bool pipeline_stop = pc_pipeline_stop(c, slot62_calls, slot62_hr);
+    const bool pipeline_stop = !on_vulkan && pc_pipeline_stop(c, slot62_calls, slot62_hr);
     return !c.faulted || pipeline_stop || (c.code == kMsvcCppException && formatted > 0);
 }
 
@@ -589,6 +589,8 @@ int dispatch_stop_self_test() {
     av.code = EXCEPTION_ACCESS_VIOLATION;
     check(!dispatch_stop_allowed(av, true, 0, S_OK, 0),
           "a Vulkan access violation is a failure, not an expected stop");
+    check(!dispatch_stop_allowed(av, true, 1, E_INVALIDARG, 0),
+          "a failed Vulkan pipeline creation does not excuse an access violation");
     check(dispatch_stop_allowed(av, false, 1, E_INVALIDARG, 0),
           "the documented PC null-pipeline stop remains accepted");
     check(!dispatch_stop_allowed(av, false, 1, S_OK, 0),

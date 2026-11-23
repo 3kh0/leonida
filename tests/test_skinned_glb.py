@@ -211,6 +211,49 @@ class InterleavedAccessorTest(unittest.TestCase):
         with self.assertRaisesRegex(skinned_glb.SkinError, "outside the BIN chunk"):
             skinned_glb.accessor_bytes(gltf, vertices[:-1], 0)
 
+    def test_accessors_stay_inside_their_view(self) -> None:
+        binary = struct.pack("<7f", -99, 1, 0, 2, 0, 3, 99)
+        for stride, offset, count, expected in (
+            (4, 4, 4, (0, 2, 0, 3)),
+            (8, 0, 3, (1, 2, 3)),
+        ):
+            with self.subTest(stride=stride):
+                gltf = {
+                    "bufferViews": [{"buffer": 0, "byteOffset": 4, "byteLength": 20,
+                                     "byteStride": stride}],
+                    "accessors": [{"bufferView": 0, "byteOffset": offset,
+                                   "componentType": 5126, "count": count, "type": "SCALAR"}],
+                }
+                payload, _ = skinned_glb.accessor_bytes(gltf, binary, 0)
+                self.assertEqual(payload, struct.pack(f"<{count}f", *expected))
+                # Both cases end exactly at the view boundary. Moving four bytes
+                # forward would read the neighboring view's sentinel, still in BIN.
+                gltf["accessors"][0]["byteOffset"] += 4
+                with self.assertRaisesRegex(skinned_glb.SkinError, "outside its bufferView"):
+                    skinned_glb.accessor_bytes(gltf, binary, 0)
+
+    def test_view_must_fit_the_bin_even_when_accessor_does(self) -> None:
+        gltf = {
+            "bufferViews": [{"buffer": 0, "byteLength": 12}],
+            "accessors": [{"bufferView": 0, "componentType": 5126,
+                           "count": 1, "type": "SCALAR"}],
+        }
+        with self.assertRaisesRegex(skinned_glb.SkinError, "outside the BIN chunk"):
+            skinned_glb.accessor_bytes(gltf, bytes(8), 0)
+
+    def test_offsets_and_view_length_are_nonnegative_integers(self) -> None:
+        for target, field in (("view", "byteOffset"), ("view", "byteLength"),
+                              ("accessor", "byteOffset")):
+            for value in (-4, None, "4", 4.0, True):
+                with self.subTest(target=target, field=field, value=value):
+                    view = {"buffer": 0, "byteOffset": 4, "byteLength": 8}
+                    accessor = {"bufferView": 0, "byteOffset": 4, "componentType": 5126,
+                                "count": 1, "type": "SCALAR"}
+                    (view if target == "view" else accessor)[field] = value
+                    with self.assertRaises(skinned_glb.SkinError):
+                        skinned_glb.accessor_bytes(
+                            {"bufferViews": [view], "accessors": [accessor]}, bytes(16), 0)
+
 
 class SkinnedGlbTest(unittest.TestCase):
     def setUp(self):
@@ -242,6 +285,35 @@ class SkinnedGlbTest(unittest.TestCase):
         self.assertEqual(stats["triangles"], 1)
         self.assertEqual(stats["source_weight_sum_min"], 255)
         self.assertEqual(stats["source_weight_sum_max"], 255)
+
+    def test_cli_rejects_geometry_outside_its_view_without_replacing_output(self):
+        from anim_glb import pack_glb
+
+        skeleton = _skeleton_dir(self.root)
+        component = _component(self.root)
+        source_path = os.path.join(component, "model.glb")
+        source, binary = skinned_glb.read_glb(source_path)
+        position = source["accessors"][source["meshes"][0]["primitives"][0]["attributes"]["POSITION"]]
+        position["byteOffset"] = source["bufferViews"][position["bufferView"]]["byteLength"]
+        # The adjacent normal data is inside BIN, but is not this accessor's data.
+        malformed = pack_glb(source, binary)
+        with open(source_path, "wb") as handle:
+            handle.write(malformed)
+        output = self._write(b"previous output")
+
+        result = subprocess.run(
+            [sys.executable, "-I", os.path.join(ROOT, "tools", "skinned_glb.py"), output,
+             "--skeleton", skeleton, "--component", component], capture_output=True, text=True)
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1)
+        self.assertIn("outside its bufferView", result.stderr)
+        with open(output, "rb") as handle:
+            self.assertEqual(handle.read(), b"previous output")
+        with open(source_path, "rb") as handle:
+            self.assertEqual(handle.read(), malformed)
+        self.assertFalse(os.path.exists(output + ".tmp"))
 
     def test_normalized_byte_uvs_have_aligned_output_rows(self) -> None:
         from anim_glb import pack_glb

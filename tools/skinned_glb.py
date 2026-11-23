@@ -658,10 +658,18 @@ def accessor_bytes(gltf: dict, bin_data: bytes, index: int) -> tuple[bytes, dict
     stride = view.get("byteStride", element)
     if not isinstance(stride, int) or stride < element:
         raise SkinError(f"accessor {index} has an invalid byteStride")
-    start = view.get("byteOffset", 0) + accessor.get("byteOffset", 0)
-    end = start + ((count - 1) * stride + element if count else 0)
-    if start < 0 or end > len(bin_data):
-        raise SkinError(f"accessor {index} is outside the BIN chunk")
+    view_offset = view.get("byteOffset", 0)
+    view_length = view.get("byteLength")
+    accessor_offset = accessor.get("byteOffset", 0)
+    if any(type(value) is not int or value < 0
+           for value in (view_offset, view_length, accessor_offset)):
+        raise SkinError(f"accessor {index} has an invalid byteOffset or bufferView range")
+    if view_offset + view_length > len(bin_data):
+        raise SkinError(f"bufferView for accessor {index} is outside the BIN chunk")
+    span = (count - 1) * stride + element if count else 0
+    if accessor_offset + span > view_length:
+        raise SkinError(f"accessor {index} is outside its bufferView")
+    start = view_offset + accessor_offset
     if stride == element:
         packed = bin_data[start:start + element * count]
     else:

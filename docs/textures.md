@@ -931,7 +931,8 @@ generated JSON file or directory (`bc6h.json` / `bc7.json`, e.g. from
   and `historyEndpointLastResort` (`[k, sub, e, c]` or `[k, slot]` pairs).
 
 For BC1–BC5, `tools/bcpack_tables.py` (added earlier) holds the rANS probability tables and
-default BC1/BC3/BC4/BC5 rank/history tables (extendable or replaceable via `--history`):
+default BC1/BC3/BC4/BC5 rank/history tables; `tools/bcpack_tool.py decode` and `tools/ttpf_mips.py`
+take `--history <path>` to extend or replace them with a locally calibrated JSON file:
 
 | Format | History source | Strict vs. provisional status | Notes |
 |---|---|---|---|

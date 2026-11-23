@@ -228,6 +228,17 @@ class RigParseTest(unittest.TestCase):
     def test_joaat_known_value(self):
         self.assertEqual(anim_index.joaat32("adder"), 0xB779A091)
 
+    def test_fd_string_rejects_every_truncated_prefix(self):
+        name = b"anim/rig/synthetic/complete"
+        field = _fd(name)
+        for offset in (0, 3):
+            prefix = bytes(offset)
+            with self.subTest(offset=offset, complete=True):
+                self.assertEqual(anim_index._fd_string(prefix + field, offset), name.decode("ascii"))
+            for end in range(len(field)):
+                with self.subTest(offset=offset, end=end):
+                    self.assertIsNone(anim_index._fd_string(prefix + field[:end], offset))
+
     def test_rbf0_rigsets_and_entries(self):
         r = anim_index.parse_rbf0(rbf0_blob())
         self.assertEqual(r["header"]["schema"], "rage__crRigSetManager")
@@ -241,6 +252,19 @@ class RigParseTest(unittest.TestCase):
         self.assertEqual(r["rigsets"][0]["entries"][0]["source_offset"],
                          rbf0_blob().find(b"canonical@source") - 6)
         self.assertEqual(r["rigsets"][0]["distinct_rigs"], 2)
+
+    def test_rbf0_keeps_complete_entries_before_a_truncated_rig(self):
+        blob = rbf0_blob()
+        name = b"anim/rig/pipelined/source/synthetic/three"
+        cut = blob.index(name) + len(name) - 5
+        complete = anim_index.parse_rbf0(blob)
+        truncated = anim_index.parse_rbf0(blob[:cut])
+        self.assertEqual(truncated["rigsets"][:2], complete["rigsets"][:2])
+        self.assertEqual(truncated["rigsets"][2]["entries"], [])
+        self.assertEqual(truncated["rigsets"][2]["distinct_rigs"], 0)
+        self.assertEqual((truncated["summary"]["entries"], truncated["summary"]["distinct_rigs"]), (2, 2))
+        self.assertEqual(truncated["summary"]["empty_rigsets"], 2)
+        self.assertEqual(truncated["summary"]["sources"]["pipelined@source"]["entries"], 0)
 
     def test_rbf0_rejects_non_rbf0(self):
         with self.assertRaises(ValueError):
@@ -588,6 +612,38 @@ class RigArchiveTest(unittest.TestCase):
                 with open(rigs, encoding="utf-8") as f:
                     summary = json.load(f)["rbf0"]["summary"]
                 self.assertEqual((summary["distinct_names"], summary["stored_name_hashes"]), (2, expected))
+
+    def test_cli_rigs_omits_truncated_names_in_directory_and_archive(self):
+        blob = rbf0_blob()
+        names = ["anim/rig/canonical/source/synthetic/one",
+                 "anim/rig/generated/source/synthetic/two",
+                 "anim/rig/pipelined/source/synthetic/three"]
+        cut = blob.index(names[-1].encode("ascii")) + len(names[-1]) - 5
+        for label, payload, expected in (("complete", blob, names), ("truncated", blob[:cut], names[:2])):
+            carved = os.path.join(self.root, label)
+            os.mkdir(carved)
+            with open(os.path.join(carved, "000000000100.bin"), "wb") as f:
+                f.write(payload)
+            archive = os.path.join(self.root, label + ".rpf")
+            header = bytearray(0x100)
+            header[:4] = b"9FPR"
+            struct.pack_into("<I", header, 4, len(header))
+            body = zlib.compress(payload)
+            with open(archive, "wb") as f:
+                f.write(header + body + bytes((-len(body)) % 16))
+            for kind, source in (("directory", carved), ("archive", archive)):
+                with self.subTest(label=label, kind=kind):
+                    out = os.path.join(self.root, label + "-" + kind + "-index.json")
+                    rigs = os.path.join(self.root, label + "-" + kind + "-rigs.json")
+                    p = subprocess.run([sys.executable, "-I", TOOL, source, out, "--rigs", rigs, "--quiet"],
+                                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+                    self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+                    with open(rigs, encoding="utf-8") as f:
+                        result = json.load(f)["rbf0"]
+                    self.assertEqual([entry["rig"] for row in result["rigsets"] for entry in row["entries"]],
+                                     expected)
+                    self.assertEqual((result["summary"]["entries"], result["summary"]["distinct_rigs"]),
+                                     (len(expected), len(expected)))
 
 
 class ShortStreamEndsTheResource(unittest.TestCase):

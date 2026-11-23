@@ -563,6 +563,31 @@ class ArchiveAndCliTest(unittest.TestCase):
         self.assertEqual((rows[0]["placement"], rows[0]["streams"], rows[0]["entities"]), ("standalone", 2, 4))
         self.assertEqual((rows[1]["placement"], rows[1]["framing"], rows[1]["complete"]), ("psin_lrsc", "psin", True))
 
+    def test_directory_cli_charges_one_stored_size_per_offset(self):
+        canonical = "000000001000.bin"
+        early = "000000001000-copy.bin"
+        short = "001000.bin"
+        for names, expected in (
+            ((early, canonical), [None, 22]),
+            ((canonical, short), [22, None]),
+            ((early, short), [22, None]),
+            ((short,), [22]),
+        ):
+            with self.subTest(names=names), tempfile.TemporaryDirectory(dir=self.root) as folder:
+                for name in names:
+                    with open(os.path.join(folder, name), "wb") as fh:
+                        fh.write(self.psin_single)
+                with open(os.path.join(folder, "index.json"), "w", encoding="utf-8", newline="\n") as fh:
+                    json.dump({"files": [{"off": 4096, "stored": 22, "size": len(self.psin_single)}]}, fh)
+                out = os.path.join(self.root, "report.json")
+                subprocess.run([sys.executable, "-I", TOOL, folder, out, "--quiet"], check=True)
+                with open(out, encoding="utf-8") as fh:
+                    report = json.load(fh)
+                self.assertEqual([r["stored"] for r in report["records"]], expected)
+                total = 22 + (len(names) - 1) * len(self.psin_single)
+                self.assertEqual(report["summary"]["compressed_bytes"], total)
+                self.assertEqual(report["summary"]["span"], total)
+
     def test_single_file_cli_and_lf_line_endings(self):
         single_meta = os.path.join(self.root, "meta.bin")
         with open(single_meta, "wb") as fh:

@@ -282,6 +282,8 @@ def music_channels(d: bytes, mus, data, collect_packets: bool = True):
             if info[c][3] != 0x0B:
                 continue
             packets = opus_packets(d, start, count * 2048)
+            if packets is None:
+                return []
             repeated = repeated_prefix_packets(packets, previous[c], skip) if skip else 0
             if repeated is None:
                 return []
@@ -297,15 +299,18 @@ def music_channels(d: bytes, mus, data, collect_packets: bool = True):
     return [tuple(x) for x in info]
 
 
-def opus_packets(d: bytes, at: int, size: int):
+def opus_packets(d: bytes, at: int, size: int) -> list[bytes] | None:
+    """Return packets from complete blocks, or None when a packet crosses a block boundary."""
     out = []
     for b in range(at, at + size, 2048):
         p = b
         end = b + 2048
         while p + 2 <= end:
             n, = struct.unpack_from("<H", d, p)
-            if n == 0 or p + 2 + n > end:
+            if n == 0:
                 break
+            if p + 2 + n > end:
+                return None
             out.append(bytes(d[p + 2:p + 2 + n]))
             p += 2 + n
     return out

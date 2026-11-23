@@ -457,6 +457,49 @@ class TestIEEE754BoundaryExtremes(unittest.TestCase):
         ])
         self.assertEqual(words[0], 0xFFC00000)
 
+class TestNegativeControlsAndMutation(unittest.TestCase):
+    def test_negative_dst_rejection(self):
+        with self.assertRaises(TypeError):
+            VOr3B32Instruction(
+                dst=Operand.sgpr(0),
+                src0=Operand.vgpr(0),
+                src1=Operand.vgpr(1),
+                src2=Operand.vgpr(2),
+            )
+
+    def test_out_of_bounds_register_rejection(self):
+        with self.assertRaises(ValueError):
+            Operand.vgpr(256)
+        with self.assertRaises(ValueError):
+            Operand.sgpr(106)
+
+    def test_mutation_operator_inverted_to_and(self):
+        # If OR is mutated to AND, 1 | 2 | 4 would return 0 instead of 7
+        a, b, c = 1, 2, 4
+        correct = ref_or3_b32(a, b, c)
+        mutated = a & b & c
+        self.assertNotEqual(correct, mutated)
+        self.assertEqual(correct, 7)
+        self.assertEqual(mutated, 0)
+
+    def test_mutation_operator_inverted_to_xor(self):
+        # If OR is mutated to XOR, 1 | 1 | 1 would return 1 for both, but 1 | 1 | 0 is 1 for OR, 0 for XOR
+        a, b, c = 1, 1, 0
+        correct = ref_or3_b32(a, b, c)
+        mutated = a ^ b ^ c
+        self.assertNotEqual(correct, mutated)
+        self.assertEqual(correct, 1)
+        self.assertEqual(mutated, 0)
+
+    def test_mutation_dropped_third_operand(self):
+        # If src2 is dropped, 0 | 0 | 4 would return 0 instead of 4
+        a, b, c = 0, 0, 4
+        correct = ref_or3_b32(a, b, c)
+        dropped = a | b
+        self.assertNotEqual(correct, dropped)
+        self.assertEqual(correct, 4)
+        self.assertEqual(dropped, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -63,6 +63,14 @@ class PickPair(unittest.TestCase):
                           "bindings": [0, 1, 2]}, PS_TEXT)
         self.assertEqual(self.names(), ("a_vs", "b_ps"))
 
+    def test_skips_non_object_entries(self):
+        for name, entry in (("array", []), ("boolean", False), ("null", None), ("number", 7), ("string", "x")):
+            self.add(name, entry, "")
+        self.assertIsNone(self.pick())
+        self.add("valid_vs", {"stage": "vs", "input_signature": VS_SIG, "user_sgpr_reads": PTR8, "bindings": []}, VS_TEXT)
+        self.add("valid_ps", {"stage": "ps", "input_signature": PS_SIG, "user_sgpr_reads": PTR8, "bindings": [0, 1, 2]}, PS_TEXT)
+        self.assertEqual(self.names(), ("valid_vs", "valid_ps"))
+
     def test_rejects_wrong_layout_and_signature(self):
         self.add("a_vs", {"stage": "vs", "input_signature": VS_SIG, "user_sgpr_reads": PTR8, "bindings": []},
                  VS_TEXT.replace("0x160", "0x100"))
@@ -82,6 +90,15 @@ class PickPair(unittest.TestCase):
 
     def test_missing_index(self):
         self.assertIsNone(sandbox.pick_pair(os.path.join(self.root, "nowhere")))
+
+    def test_a_non_object_index_is_no_pair_not_a_crash(self):
+        # pick_pair returns None for a missing or unreadable index; a well-formed JSON that is not an
+        # object (list/string/null/number) used to reach sorted(index)/index[name] and raise TypeError.
+        for index in (["a_vs"], "x", None, 5):
+            with self.subTest(index=index):
+                with open(os.path.join(self.root, "spirv", "index.json"), "w") as f:
+                    json.dump(index, f)
+                self.assertIsNone(sandbox.pick_pair(self.root))
 
 
 class CheckFrame(unittest.TestCase):

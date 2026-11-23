@@ -130,30 +130,30 @@ def decode_box16(words):
 # the float32 slab test and the triangle test round apart, and a ray on an edge that also lies on a box face must
 # not be cut by the box of the triangle the edge rule gives it to (docs/bvh.md 7a, box padding).
 BOX_PAD = 2.0 ** -19
+_PAD_FLOOR = 1e-30          # the GLSL literal, so a box at the origin still widens
 
 
-def _f32_outward(x, up):
-    """x rounded to a float32 no smaller (up) or no larger than x; inf past the range."""
+def _f32_or_inf(x):
+    """x rounded to the nearest float32, as a GPU float operation does; inf past the range."""
     try:
-        r = struct.unpack("<f", struct.pack("<f", x))[0]
+        return f32(x)
     except OverflowError:
         return math.copysign(INF, x)
-    if (r < x) if up else (r > x):
-        b = struct.unpack("<I", struct.pack("<f", r))[0]
-        if r == 0.0:
-            b = 0x00000001 if up else 0x80000001
-        else:
-            b = b + 1 if (r > 0.0) == up else b - 1
-        r = struct.unpack("<f", struct.pack("<I", b))[0]
-    return r
 
 
 def pad_box32(lo, hi):
-    """The BOX32 bounds written for an exact box: outward by BOX_PAD of its largest |coordinate|. Empty boxes stay."""
+    """The BOX32 bounds xdxr_build.comp writes for an exact float32 box, bit for bit: pad = max|coordinate| * BOX_PAD
+    + 1e-30 and each bound moved out by it, every operation rounded to the nearest float32 (16 to 32 float32 steps of
+    the largest coordinate). Empty boxes stay, and so do boxes with an infinite coordinate (the pad would be inf, and
+    inf - inf a NaN bound)."""
     if not all(lo[c] <= hi[c] for c in range(3)):
         return lo, hi
-    pad = max(max(abs(x) for x in lo), max(abs(x) for x in hi)) * BOX_PAD + 1e-30
-    return [_f32_outward(x - pad, False) for x in lo], [_f32_outward(x + pad, True) for x in hi]
+    # max|coordinate| * 2^-19 is exact in double; the sum of two float32 values rounds once more, to float32
+    pad = _f32_or_inf(max(abs(x) for x in [*lo, *hi]) * BOX_PAD + f32(_PAD_FLOOR))
+    if not math.isfinite(pad):
+        return lo, hi
+    return [_f32_or_inf(x - pad) for x in lo], [_f32_or_inf(x + pad) for x in hi]
+
 
 
 def encode_box16(lo, hi):

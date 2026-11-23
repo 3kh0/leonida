@@ -67,7 +67,7 @@ const uint FLAG_BOTTOM_LEVEL = 0x80000000u, VERSION_2403 = 6u, INST_IDENTITY_ROT
 // face of the boxes (a flat or axis-aligned mesh, a vertex) can be cut by the box of the triangle the edge rule gives
 // it to, and pass through a closed mesh (docs/bvh.md 7a, box padding). Scratch keeps the exact boxes, so the
 // padding does not grow level by level, and a parent's padded box still holds its children's.
-const float BOX_PAD = 1.9073486328125e-6;          // 2^-19, about 32 float32 steps of the largest coordinate
+const float BOX_PAD = 1.9073486328125e-6;          // 2^-19: 16 to 32 float32 steps of the largest coordinate
 
 layout(push_constant) uniform Push {
     uvec2 dst;            // the acceleration structure (header at byte 0)
@@ -441,8 +441,10 @@ void build_node(uint n) {
         if (!box_empty(lo, hi)) {
             vec3 m = max(abs(lo), abs(hi));
             float pad = max(max(m.x, m.y), m.z) * BOX_PAD + 1e-30;
-            lo -= vec3(pad);
-            hi += vec3(pad);
+            if (!isinf(pad) && !isnan(pad)) {           // an infinite coordinate: inf - inf would be a NaN bound
+                lo -= vec3(pad);
+                hi += vec3(pad);
+            }
         }
         uint b = o + 16u + 24u * c;
         storef(pc.dst, b, lo.x); storef(pc.dst, b + 4u, lo.y); storef(pc.dst, b + 8u, lo.z);

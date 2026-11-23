@@ -537,8 +537,9 @@ already exactly its layout's size, so `COMPACTED_SIZE` and `CURRENT_SIZE` (from
 mode are refused at replay as unsupported, not faked. In `LEONIDA_RT_AS=khr` mode the postbuild descs stay ignored,
 as before.
 
-**Box padding.** Every BOX32 child box is written widened outward by 2^-19 of its largest coordinate magnitude (about
-32 float32 steps), in builds and refits (`xdxr_build.comp` `BOX_PAD`, and `xdxr_bvh.py build_blas`). Scratch keeps the
+**Box padding.** Every BOX32 child box is written widened outward by 2^-19 of its largest coordinate magnitude (16 to
+32 float32 steps of it, each bound rounded to nearest, the same bits on the GPU and in `xdxr_bvh.py build_blas`), in
+builds and refits (`xdxr_build.comp` `BOX_PAD`). A box with an infinite coordinate is not padded. Scratch keeps the
 exact boxes, so the padding does not grow level by level and a parent's padded box still holds its children's. The
 translated `image_bvh` makes the box test and the triangle edge rule in float32, apart. On an edge that is also the
 face of the two triangles' boxes (flat and axis-aligned meshes, and vertices), a ray can belong to one triangle by the

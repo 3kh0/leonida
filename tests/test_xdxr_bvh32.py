@@ -129,13 +129,20 @@ class SameStepAsTheTranslator(unittest.TestCase):
 
 
 class PaddedBoxes(unittest.TestCase):
-    def test_box_holds_its_triangle_and_stays_close(self):
-        lo, hi = [1.0, 0.0, 0.0], [2.0, 1.0, 0.0]
-        plo, phi = X.pad_box32(lo, hi)
-        for c in range(3):
-            self.assertLess(plo[c], lo[c])
-            self.assertGreater(phi[c], hi[c])
-            self.assertLess(phi[c] - hi[c], 1e-5)
+    def test_same_bits_as_the_gpu_builder(self):
+        # xdxr_build.comp rounds every step to nearest: pad = m * 2^-19 (m = 1 + 2^-23, the largest coordinate), and
+        # m - pad, m + pad, 1 + pad round to the nearest float32, not outward
+        m = float.fromhex("0x1.000002p+0")
+        pad = float.fromhex("0x1.000002p-19")
+        plo, phi = X.pad_box32([m, 0.0, 0.0], [m, 1.0, 0.0])
+        self.assertEqual(plo, [float.fromhex("0x1.ffffc4p-1"), -pad, -pad])
+        self.assertEqual(phi, [float.fromhex("0x1.000022p+0"), float.fromhex("0x1.00002p+0"), pad])
+
+    def test_infinite_coordinate_leaves_a_valid_tree(self):
+        # pad = inf there, and inf - inf a NaN bound that no parent box holds
+        tris = [PAIR[0], [(X.INF, 0, 0), (X.INF, 1, 0), (X.INF, 1, 1)], PAIR[1]]
+        data, _ = X.build_blas(tris)
+        self.assertEqual(X.validate(data, expect_bottom=True), [])
 
     def test_empty_box_stays_empty(self):
         e = ([X.INF] * 3, [-X.INF] * 3)

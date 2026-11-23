@@ -181,7 +181,8 @@ class DirectorySource:
 
     def __init__(self, directory: str):
         self.directory = directory
-        with open(os.path.join(directory, "index.json"), encoding="utf-8") as f:
+        # A work folder's index.json re-saved with Notepad or PowerShell's Out-File carries a UTF-8 BOM.
+        with open(os.path.join(directory, "index.json"), encoding="utf-8-sig") as f:
             self.index = json.load(f)
         self.rows = sorted(self.index["files"], key=lambda r: r["off"])
 
@@ -212,7 +213,7 @@ class ArchiveSource:
                                capture_output=True, text=True, encoding="utf-8", errors="replace")
             if r.returncode != 0:
                 raise RuntimeError((r.stdout + r.stderr).strip() or "rpf9_carve.py failed")
-        with open(os.path.join(index_dir, "index.json"), encoding="utf-8") as f:
+        with open(os.path.join(index_dir, "index.json"), encoding="utf-8-sig") as f:
             self.index = json.load(f)
         self.rows = sorted(self.index["files"], key=lambda r: r["off"])
         self._fh = open(archive, "rb")

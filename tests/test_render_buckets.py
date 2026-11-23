@@ -84,6 +84,38 @@ class StreamTests(unittest.TestCase):
                         self.assertEqual(stop.value, 1234, chunk)
                         break
 
+    def test_invalid_json_is_rejected(self):
+        # review on #4946: separators and the enclosing object are checked, at every read size
+        bad = ['{ "Count":2,"Items":[{}{}]', '{"Items":[{},]}', '{"Items":[,{}]}', '{"Items":[{},,{}]}',
+               '{"Items":[{}]', '{"Items":[{}]} x', '{"Items":[{}] "Count":1}', '{"Count":1 "Items":[]}',
+               '{"Items":[{}],}', '{"Count":1}', '[{}]', '']
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.json")
+            for text in bad:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                for chunk in (1, 2, 5, rb.CHUNK):
+                    with self.assertRaises(ValueError, msg=(text, chunk)):
+                        list(rb.iter_items(path, chunk))
+
+    def test_top_level_count_only(self):
+        good = {'{"src":"\\"Items\\": [","Items":[{}],"Count":1}': 1,
+                '{"Count":2,"Items":[{},{}],"Fail":[{"Count":7}]}': 2,
+                '{"Items":[],"Count":0}': 0, '{"Items":[{}]}': None}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "m.json")
+            for text, want in good.items():
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(text)
+                for chunk in range(1, len(text) + 2):
+                    gen = rb.iter_items(path, chunk)
+                    while True:
+                        try:
+                            next(gen)
+                        except StopIteration as stop:
+                            self.assertEqual(stop.value, want, (text, chunk))
+                            break
+
     def test_empty_items(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_manifest(tmp, [])
@@ -152,6 +184,16 @@ class CountTests(unittest.TestCase):
             self.assertEqual(out["no_shader"], 2)
             self.assertEqual(total["materials"], 3)
 
+    def test_same_label_twice_keeps_both_entries(self):
+        # review on #4946: a second manifest with the same archive label must not overwrite the first entry
+        with tempfile.TemporaryDirectory() as tmp:
+            p1 = write_manifest(os.path.join(tmp, "a", "levels", "models"), [model("x", [0])])
+            p2 = write_manifest(os.path.join(tmp, "b", "levels", "models"), [model("y", [6]), model("z", [6])])
+            per, total, _ = rb.count([("levels", p1), ("levels", p2)])
+            self.assertEqual(sorted(per), ["levels", "levels (2)"])
+            self.assertEqual((per["levels"]["models"], per["levels (2)"]["models"]), (1, 2))
+            self.assertEqual(total["models"], sum(t["models"] for t in per.values()))
+
     def test_count_mismatch_is_reported(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_manifest(os.path.join(tmp, "arc", "models"), [model("a", [0])], count=2)
@@ -205,6 +247,17 @@ class CliTests(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("(Count 2)", out)
             self.assertIn("Count says 2", err)
+
+    def test_invalid_manifest_exits_2_without_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = os.path.join(tmp, "arc", "models")
+            os.makedirs(folder)
+            with open(os.path.join(folder, "manifest.json"), "w", encoding="utf-8") as f:
+                f.write('{"Items":[{}{}]}')
+            code, _, err = self.run_cli([tmp])
+            self.assertEqual(code, 2)
+            self.assertIn("invalid manifest JSON", err)
+            self.assertNotIn("Traceback", err)
 
     def test_mismatch_sets_exit_code(self):
         with tempfile.TemporaryDirectory() as tmp:

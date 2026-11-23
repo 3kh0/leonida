@@ -216,7 +216,7 @@ Either way it copies `gta6rt.exe` and `gta6rt_tls_host.dll` into `--out` and wri
 starts `gta6rt.exe` with `wine` or the command named by `WINE`. `--runtime-build` also skips the build on Windows.
 
 To use Proton outside Steam, install umu-launcher and put `--proton` before the loader arguments.
-[umu-launcher installation](https://github.com/Open-Wine-Components/umu-launcher#installation)
+[umu-launcher installation](https://github.com/Open-Wine-Components/umu-launcher#installing)
 
 ```sh
 cd "/path/to/package"

@@ -100,5 +100,45 @@ class VFractF16OracleTests(unittest.TestCase):
         self.assertEqual(oracle_fract_f16(F16_POS_ZERO), F16_POS_ZERO)
         self.assertEqual(oracle_fract_f16(F16_NEG_ZERO), F16_POS_ZERO)
 
+class RegKind(enum.Enum):
+    VGPR = "vgpr"
+    SGPR = "sgpr"
+    IMM = "imm"
+
+
+@dataclass(frozen=True)
+class Operand:
+    kind: RegKind
+    index: int = 0
+    raw_val: int = 0
+
+
+@dataclass(frozen=True)
+class F16InstructionAST:
+    mnemonic: str
+    dst: Operand
+    src0: Operand
+    src1: Operand | None = None
+
+
+class WavefrontSimdState:
+    def __init__(self, lane_count: int = 32):
+        self.lane_count = lane_count
+        self.exec_mask: int = (1 << lane_count) - 1
+        self.vgprs = [0] * lane_count
+
+    def set_vgpr(self, lane: int, val: int):
+        self.vgprs[lane] = val & MASK16
+
+    def get_vgpr(self, lane: int) -> int:
+        return self.vgprs[lane] & MASK16
+
+class VFractF16AstTests(unittest.TestCase):
+    def test_fract_ast_construction(self):
+        ast = F16InstructionAST("v_fract_f16", Operand(RegKind.VGPR, 1), Operand(RegKind.VGPR, 0))
+        self.assertEqual(ast.mnemonic, "v_fract_f16")
+        self.assertEqual(ast.dst.index, 1)
+        self.assertEqual(ast.src0.index, 0)
+
 if __name__ == "__main__":
     unittest.main()

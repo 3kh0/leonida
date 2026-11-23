@@ -32,6 +32,8 @@ import tempfile
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# "wine: Unhandled page fault ... starting debugger..." and "wine: Unimplemented function ... starting debugger...".
+ABORTED = re.compile(r"^wine: .*starting debugger\.\.\.", re.MULTILINE)
 
 
 def _make_parent(path: str) -> None:
@@ -120,6 +122,96 @@ class DriveMap:
         finally:
             if self.scratch:
                 shutil.rmtree(self.scratch, ignore_errors=True)   # removes the links, never what they point to
+        return False
+
+
+class WineDebugger:
+    """Makes a process that Wine aborts end at once, for the run, instead of waiting for its crash debugger.
+
+    Wine's default crash handler (HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug, "winedbg --auto") is
+    started for an unhandled exception, such as a call to a function this Wine does not implement ("Unimplemented
+    function KERNEL32.dll.CopyFile2 ... starting debugger..."). Under Xvfb it never ends, so the test sat until
+    --timeout (120 s each). With Debugger set to "false" the process dies in under a second with a non-zero exit code,
+    which run_test reports as the failure it was (see ABORTED). The old value is put back afterwards.
+
+    The value is only touched when it is exactly the REG_SZ default (DEFAULT_DEBUGGER), or when the query shows it is
+    absent. Anything else (another command, an empty or REG_EXPAND_SZ value, a query that failed for another reason,
+    a missing prefix, keep=True) is left alone, and so is a test whose CTest ENVIRONMENT sets its own WINEPREFIX. A
+    failing "wine reg" never fails the run: a restore that fails is tried twice, then reported with the command that
+    restores it by hand. A run killed with SIGKILL cannot restore it, and two runs on one prefix must not overlap.
+    """
+
+    KEY = r"HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug"
+    DEFAULT_DEBUGGER = "winedbg --auto %ld %ld"
+
+    def __init__(self, wine: list[str], prefix: str, keep: bool = False):
+        self.wine, self.prefix, self.keep = list(wine), prefix, keep
+        self.active, self.previous = False, None
+        self.note = ""
+
+    def _reg(self, *argv: str) -> tuple[int, str] | None:
+        try:
+            proc = subprocess.run(self.wine + ["reg", *argv], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return proc.returncode, proc.stdout.decode("utf-8", "replace")
+
+    def _set(self, value: str) -> bool:
+        result = self._reg("add", self.KEY, "/v", "Debugger", "/t", "REG_SZ", "/d", value, "/f")
+        return result is not None and result[0] == 0
+
+    def __enter__(self):
+        if self.keep or not os.path.isdir(os.path.join(self.prefix, "dosdevices")):
+            return self
+        query = self._reg("query", self.KEY, "/v", "Debugger")
+        if query is None:
+            self.note = "wine reg did not run: the crash debugger is left as it is"
+            return self
+        code, out = query
+        found = re.search(r"^\s*Debugger\s+(REG_\w+)(?:\s+(.*?))?\s*$", out, re.MULTILINE)
+        if code == 0 and found:
+            kind, data = found.group(1), found.group(2) or ""
+            if (kind, data) != ("REG_SZ", self.DEFAULT_DEBUGGER):
+                self.note = f"the prefix has its own crash debugger setting ({kind} {data!r}): left as it is"
+                return self
+            self.previous = data
+        elif code == 0 or "unable to find" not in out.lower():
+            self.note = "could not read the crash debugger setting: left as it is"
+            return self
+        if not self._set("false"):
+            self.note = "could not set the crash debugger: a crashing test waits for winedbg"
+            return self
+        self.active = True
+        # Printed before the tests run, so a run killed with SIGKILL still left the exact way back in its log.
+        self.note = ("Wine's crash debugger is off for this run: an aborted test ends at once. "
+                     f"If this run is killed, put it back with: {self.restore_command()}")
+        return self
+
+    def restore_command(self) -> str:
+        """The command that puts the prefix back as it was: the default value again, or no value when there was none."""
+        if self.previous is not None:
+            return (f'WINEPREFIX="{self.prefix}" {self._wine_text()} reg add "{self.KEY}" /v Debugger /t REG_SZ '
+                    f'/d "{self.previous}" /f')
+        return f'WINEPREFIX="{self.prefix}" {self._wine_text()} reg delete "{self.KEY}" /v Debugger /f'
+
+    def _wine_text(self) -> str:
+        """The wine command this run uses (--wine, $WINE: possibly a Proton path), quoted for a POSIX shell."""
+        return shlex.join(self.wine)
+
+    def __exit__(self, *exc):
+        if not self.active:
+            return False
+        for _ in range(2):
+            if self.previous is not None:
+                restored = self._set(self.previous)
+            else:
+                result = self._reg("delete", self.KEY, "/v", "Debugger", "/f")
+                restored = result is not None and result[0] == 0
+            if restored:
+                return False
+        print(f"WARNING: could not restore Wine's crash debugger in {self.prefix}; it is still 'false'. "
+              f"Restore it with: {self.restore_command()}", file=sys.stderr, flush=True)
         return False
 
 
@@ -231,6 +323,13 @@ def run_test(test: dict, args, wine: list[str], *, failed_setups: tuple[str, ...
         # A negative return code is a host-signal termination (e.g. SIGSEGV), not a process exit code:
         # report it as a failure before SKIP_RETURN_CODE or WILL_FAIL can reinterpret it.
         return "fail", f"killed by signal {-code} in {elapsed:.1f} s\n{out}"
+    if code != 0 and ABORTED.search(out):
+        # Wine's own report of an unhandled exception. Before WineDebugger the crash debugger kept such a process
+        # alive until the timeout, which is a failure whatever WILL_FAIL or an output expression say. Wine ends an
+        # aborted process with a non-zero code. A test that exits 0 with this line in its output ran a child that
+        # it expected to crash (queue_proxy_test --child-crash) and judged it itself, so its own verdict stands.
+        return "fail", (f"aborted by Wine (exit {code} in {elapsed:.1f} s; a test that expects a crashed child "
+                        f"fails here too when it exits non-zero)\n{out}")
     if code == skip_code:
         return "skip", f"exit {code} (skip) in {elapsed:.1f} s\n{out}"
     detail = f"exit {code} in {elapsed:.1f} s\n{out}"
@@ -345,6 +444,8 @@ def main() -> int:
                     help="maximum seconds per test; a shorter CTest TIMEOUT applies (default 120)")
     ap.add_argument("--summary", help="append a Markdown table to this file (e.g. $GITHUB_STEP_SUMMARY)")
     ap.add_argument("--label", help="named in the summary's heading, e.g. the Wine version")
+    ap.add_argument("--keep-wine-debugger", action="store_true",
+                    help="leave Wine's crash debugger (winedbg) on: an aborted test then waits for it until --timeout")
     args = ap.parse_args()
 
     tests = read_tests(args.tests)
@@ -366,8 +467,11 @@ def main() -> int:
     results = {}
     results_by_index: dict[int, str] = {}
     prefix = os.environ.get("WINEPREFIX") or os.path.join(os.path.expanduser("~"), ".wine")
-    with DriveMap(args.windows_root, args.root, prefix) as drive:
+    with DriveMap(args.windows_root, args.root, prefix) as drive, \
+            WineDebugger(wine, prefix, args.keep_wine_debugger) as debugger:
         print(drive.note, flush=True)
+        if debugger.note:
+            print(debugger.note, flush=True)
         for index in order:
             name = names[index]
             failed_setups = tuple(names[setup] for setup in setups[index] if results_by_index[setup] == "fail")

@@ -200,6 +200,15 @@ Vulkan instance with, so every Vulkan test fails with `vkCreateInstance failed (
 as CI does: `WINEPREFIX="$HOME/.local/share/leonida-wine" xvfb-run -a ctest --test-dir runtime/build/windows`
 (packages `xvfb` and `xauth`, which `xvfb-run` needs). With Mesa installed, the tests then run on llvmpipe.
 
+`scripts/run_wine_tests.py` (what CI uses) turns Wine's crash debugger off in the prefix for the run, so a test that Wine
+aborts fails at once instead of waiting for `winedbg` until the timeout, and puts the setting back afterwards. A run
+that is killed with SIGKILL cannot put it back and leaves `Debugger` set to `false`. The runner prints, before the
+tests start, the command that undoes it for that prefix: if the prefix had the default value it is
+`WINEPREFIX=<prefix> <wine> reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug" /v Debugger /t REG_SZ /d "winedbg --auto %ld %ld" /f`,
+and if it had no value it is
+`WINEPREFIX=<prefix> <wine> reg delete "HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug" /v Debugger /f`. `<wine>` is the command the run used (`--wine` or `$WINE`, so a Proton path shows as that path). Both are POSIX shell commands (Linux, WSL, macOS), like the runner itself. A test that exits 0 with Wine's "starting debugger..." line in its output (it ran a child it expected to crash) keeps its own verdict; a non-zero exit with that line is reported as an abort.
+Do not run two of them on one prefix at the same time, and give `--keep-wine-debugger` if you want `winedbg`'s backtrace.
+
 A virtual X server has no presentable surface, so presentation cannot be judged under it. With a real display (here
 Wine 11.22 on a Wayland session, through XWayland) the same 123-test list gives 92 passed, 6 failed and 25 skipped,
 and `vk_presenter_sync`, `xbox_present` and `dxgi_swapchain` pass, while they fail under `xvfb-run`. Use a real

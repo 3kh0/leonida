@@ -11,6 +11,7 @@
 #include <mutex>
 #include <span>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace leonida {
@@ -80,7 +81,7 @@ public:
 
     // Inserts or updates a key -> index mapping.
     // If the key already exists in one of the 8 probe slots, its index is updated.
-    // Try one bounded relocation before growing. Load never exceeds 50%.
+    // Try bounded relocation along the probe chain before growing. Load never exceeds 50%.
     bool insert(const std::uint32_t key[8], std::uint32_t index) {
         insert_or_update(key, index);
         return true;
@@ -218,9 +219,10 @@ public:
         if (first > entries_.size() || count > entries_.size() - first) return false;
         for (std::uint32_t i = 0; i < count; ++i) {
             const DescriptorEntry& entry = entries_[first + i];
-            std::memcpy(dest + i * 10, entry.key, sizeof(entry.key));
-            dest[i * 10 + 8] = entry.index;
-            dest[i * 10 + 9] = entry.pad;
+            const std::size_t base = std::size_t(i) * 10;
+            std::memcpy(dest + base, entry.key, sizeof(entry.key));
+            dest[base + 8] = entry.index;
+            dest[base + 9] = entry.pad;
         }
         return true;
     }
@@ -243,30 +245,88 @@ public:
     }
 
 private:
-    void mark(std::uint32_t slot) { changed_slots_.push_back(slot); }
+    void mark(std::uint32_t slot) {
+        if (!all_changed_) changed_slots_.push_back(slot);
+    }
 
-    // All eight slots for the incoming key are occupied. Try moving one resident
-    // to the first empty slot beyond that window, within its own eight probes.
-    // A later hole is farther from every resident, so failure here is final for a single move.
-    // `moved_to` receives the hole the resident moved into, so the caller can mark that slot changed too.
+    // All eight slots for the incoming key are occupied. Find the first empty slot past the probe window and walk it
+    // back in hops <= kDescriptorProbes - 1 until it lands in [hash, hash + 7], moving residents within their own
+    // probe windows. Moves are recorded before mutating `entries`, so a failed search leaves `entries` untouched.
     static int make_probe_slot(std::vector<DescriptorEntry>& entries, std::uint32_t hash,
-                               std::uint32_t* moved_to = nullptr) {
-        const auto mask = static_cast<std::uint32_t>(entries.size() - 1);
-        for (auto offset = kDescriptorProbes; offset < 2 * kDescriptorProbes - 1; ++offset) {
-            const auto hole = (hash + offset) & mask;
-            if (entries[hole].pad == kSlotOccupiedMarker) continue;
-            for (auto k = kDescriptorProbes; k > 0; --k) {
-                const auto slot = (hash + k - 1) & mask;
-                const auto home = hash_descriptor_key(entries[slot].key);
+                               std::vector<std::uint32_t>* moved_slots = nullptr) {
+        const auto cap = static_cast<std::uint32_t>(entries.size());
+        const auto mask = cap - 1;
+        std::uint32_t dist = kDescriptorProbes;
+        while (dist < cap && entries[(hash + dist) & mask].pad == kSlotOccupiedMarker) ++dist;
+        if (dist >= cap) return -1;
+
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> moves;
+        std::uint32_t hole_dist = dist;
+        while (hole_dist >= kDescriptorProbes) {
+            const std::uint32_t hole = (hash + hole_dist) & mask;
+            bool moved = false;
+            for (std::uint32_t d = kDescriptorProbes - 1; d > 0; --d) {
+                const std::uint32_t slot_dist = hole_dist - d;
+                const std::uint32_t slot = (hash + slot_dist) & mask;
+                const std::uint32_t home = hash_descriptor_key(entries[slot].key);
                 if (((hole - home) & mask) < kDescriptorProbes) {
-                    entries[hole] = entries[slot];
-                    if (moved_to) *moved_to = hole;
-                    return static_cast<int>(slot); // caller immediately overwrites the resident
+                    moves.emplace_back(slot, hole);
+                    hole_dist = slot_dist;
+                    moved = true;
+                    break;
                 }
             }
-            break;
+            if (!moved) return -1;
         }
-        return -1;
+
+        for (const auto& [src, dst] : moves) {
+            entries[dst] = entries[src];
+            if (moved_slots) moved_slots->push_back(dst);
+        }
+        return static_cast<int>((hash + hole_dist) & mask);
+    }
+
+    // True when full 32-bit hashes in the contiguous occupied component around `h`, plus `h` itself, cannot fit
+    // their 8-probe intervals at any table size (Hall violation in 32-bit hash space, e.g. >=9 keys at one hash or
+    // >=10 adjacent-hash keys in 9 slots). Excludes hashes from other mod-capacity multiples so growth still resolves.
+    bool is_unresolvable_cluster_locked(std::uint32_t h) const {
+        const auto cap = static_cast<std::uint32_t>(entries_.size());
+        std::uint32_t left = h & mask_;
+        for (std::uint32_t steps = 0; steps + 1 < cap; ++steps) {
+            const std::uint32_t prev = (left - 1u) & mask_;
+            if (entries_[prev].pad != kSlotOccupiedMarker) break;
+            left = prev;
+        }
+        std::uint32_t right = (h + (kDescriptorProbes - 1u)) & mask_;
+        for (std::uint32_t steps = 0; steps + 1 < cap; ++steps) {
+            const std::uint32_t next = (right + 1u) & mask_;
+            if (entries_[next].pad != kSlotOccupiedMarker) break;
+            right = next;
+        }
+
+        const std::uint32_t cluster_len = ((right - left) & mask_) + 1u;
+        if (cluster_len > cap / 2u) return false;
+        const std::uint32_t window = cluster_len * 2u;  // <= cap <= 2^31
+        const std::uint32_t origin = h - cluster_len;
+
+        std::vector<std::uint32_t> rel_hashes;
+        rel_hashes.reserve(cluster_len + 1u);
+        rel_hashes.push_back(h - origin);
+        for (std::uint32_t offset = 0; offset < cluster_len; ++offset) {
+            const auto& entry = entries_[(left + offset) & mask_];
+            if (entry.pad != kSlotOccupiedMarker) continue;
+            const std::uint32_t rel = hash_descriptor_key(entry.key) - origin;
+            if (rel < window) rel_hashes.push_back(rel);
+        }
+
+        std::sort(rel_hashes.begin(), rel_hashes.end());
+        std::uint64_t next_free = 0;
+        for (const std::uint32_t x : rel_hashes) {
+            if (next_free < x) next_free = x;
+            if (next_free > std::uint64_t(x) + (kDescriptorProbes - 1u)) return true;
+            ++next_free;
+        }
+        return false;
     }
 
     InsertResult insert_locked(const std::uint32_t key[8], std::uint32_t index) {
@@ -289,32 +349,27 @@ private:
                 }
             }
 
+            // Refuse unresolvable collisions before growing, preserving table capacity and change state.
+            if (empty_slot < 0 && is_unresolvable_cluster_locked(h))
+                throw std::length_error("Descriptor hash collision exceeds shader probe limit");
+
             if ((occupied_count_ + 1) * 2 > entries_.size()) {
                 grow_locked();
                 continue;
             }
 
-            // Nine distinct keys with the same full hash can never fit the shader's eight probes,
-            // regardless of capacity. Refuse before allocating ever larger tables.
-            if (empty_slot < 0) {
-                std::uint32_t same_hash = 0;
-                for (std::uint32_t k = 0; k < kDescriptorProbes; ++k) {
-                    const auto& entry = entries_[(h + k) & mask_];
-                    if (hash_descriptor_key(entry.key) == h) ++same_hash;
-                }
-                if (same_hash == kDescriptorProbes)
-                    throw std::length_error("Descriptor hash collision exceeds shader probe limit");
-            }
             const bool relocate = empty_slot < 0;
-            std::uint32_t moved_to = 0;
-            if (relocate) empty_slot = make_probe_slot(entries_, h, &moved_to);
+            std::vector<std::uint32_t> moved_slots;
+            if (relocate) empty_slot = make_probe_slot(entries_, h, &moved_slots);
             if (empty_slot >= 0) {
                 auto& entry = entries_[empty_slot];
                 std::memcpy(entry.key, key, sizeof(entry.key));
                 entry.index = index;
                 entry.pad = kSlotOccupiedMarker;
                 ++occupied_count_;
-                if (relocate) mark(moved_to);
+                if (relocate) {
+                    for (const std::uint32_t s : moved_slots) mark(s);
+                }
                 mark(std::uint32_t(empty_slot));
                 return relocate ? InsertResult::added_with_relocation : InsertResult::added;
             }

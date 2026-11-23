@@ -448,7 +448,273 @@ int test_capacity_overflow() {
     return 0;
 }
 
+constexpr std::uint32_t fnv_prime_inverse() {
+    std::uint32_t inv = 1u;
+    for (int i = 0; i < 5; ++i) inv *= 2u - kFnvPrime * inv;
+    return inv;
+}
+static_assert(kFnvPrime * fnv_prime_inverse() == 1u);
+
+DescriptorKey make_key_with_hash(std::uint32_t id, std::uint32_t target_hash) {
+    DescriptorKey key{};
+    key[0] = id;
+    std::uint32_t prefix = kFnvOffsetBasis;
+    for (int word = 0; word < 7; ++word) prefix = (prefix ^ key[word]) * kFnvPrime;
+    key[7] = prefix ^ (target_hash * fnv_prime_inverse());
+    return key;
+}
+
+int test_unresolvable_collision_at_half_load_does_not_grow() {
+    {
+        DescriptorTable table(16);
+        for (std::uint32_t i = 0; i < 8; ++i) {
+            const DescriptorKey k = make_key_with_hash(i, 0u);
+            EXPECT(hash_descriptor_key(k) == 0u);
+            EXPECT(table.insert(k, i + 1));
+        }
+        table.take_changes();
+        const auto before = table.build_gpu_buffer();
+
+        bool rejected = false;
+        try { table.insert(make_key_with_hash(8, 0u), 9); }
+        catch (const std::length_error&) { rejected = true; }
+        EXPECT(rejected);
+        EXPECT(table.size() == 8);
+        EXPECT(table.capacity() == 16);
+        EXPECT(table.mask() == 15);
+        EXPECT(table.build_gpu_buffer() == before);
+        const auto changes = table.take_changes();
+        EXPECT(!changes.all && changes.slots.empty());
+    }
+    {
+        DescriptorTable table(32);
+        for (std::uint32_t i = 0; i < 8; ++i) EXPECT(table.insert(make_key_with_hash(i, 0u), i + 1));
+        for (std::uint32_t i = 0; i < 8; ++i) EXPECT(table.insert(make_key_with_hash(100 + i, 16u), i + 10));
+        table.take_changes();
+        const auto before = table.build_gpu_buffer();
+
+        bool rejected = false;
+        try { table.insert(make_key_with_hash(8, 0u), 99); }
+        catch (const std::length_error&) { rejected = true; }
+        EXPECT(rejected);
+        EXPECT(table.size() == 16);
+        EXPECT(table.capacity() == 32);
+        EXPECT(table.build_gpu_buffer() == before);
+        const auto changes = table.take_changes();
+        EXPECT(!changes.all && changes.slots.empty());
+    }
+    return 0;
+}
+
+int test_all_changed_suppresses_redundant_slot_list() {
+    {
+        DescriptorTable table(16);
+        const DescriptorKey k1 = make_key_with_hash(1, 0u);
+        const DescriptorKey k2 = make_key_with_hash(2, 4u);
+        EXPECT(table.insert(k1, 10));
+        table.clear();
+        EXPECT(table.insert(k1, 11));
+        EXPECT(table.insert_or_update(k1.data(), 12) == DescriptorTable::InsertResult::replaced);
+        EXPECT(table.insert(k2, 20));
+        EXPECT(table.erase(k1));
+        const auto changes = table.take_changes();
+        EXPECT(changes.all);
+        EXPECT(changes.slots.empty());
+    }
+    {
+        DescriptorTable table(16);
+        table.take_changes();
+        for (std::uint32_t i = 0; i < 9; ++i) EXPECT(table.insert(make_key_with_hash(i, i * 2u), i + 1));
+        EXPECT(table.capacity() == 32);
+        EXPECT(table.insert(make_key_with_hash(99, 20u), 100));
+        const auto changes = table.take_changes();
+        EXPECT(changes.all);
+        EXPECT(changes.slots.empty());
+    }
+    return 0;
+}
+
+int test_unresolvable_adjacent_hash_cluster_rejected_without_growth() {
+    std::uint32_t next_id = 1;
+    // 10 keys across adjacent hashes (2 at h=0, 8 at h=1) need 10 slots inside [0..8] (9 slots).
+    {
+        DescriptorTable table(32);
+        EXPECT(table.insert(make_key_with_hash(next_id++, 0u), 10));
+        for (int i = 0; i < 8; ++i) EXPECT(table.insert(make_key_with_hash(next_id++, 1u), 20u + i));
+        table.take_changes();
+        const auto before = table.build_gpu_buffer();
+
+        bool rejected = false;
+        try { table.insert(make_key_with_hash(next_id++, 0u), 99); }
+        catch (const std::length_error&) { rejected = true; }
+        EXPECT(rejected);
+        EXPECT(table.size() == 9);
+        EXPECT(table.capacity() == 32);
+        EXPECT(table.build_gpu_buffer() == before);
+        const auto changes = table.take_changes();
+        EXPECT(!changes.all && changes.slots.empty());
+    }
+    // Multi-step cluster: 17 keys across {0, 4, 8} need 17 slots inside [0..15] (16 slots).
+    {
+        DescriptorTable table(64);
+        for (int i = 0; i < 4; ++i) EXPECT(table.insert(make_key_with_hash(next_id++, 0u), 100u + i));
+        for (int i = 0; i < 4; ++i) EXPECT(table.insert(make_key_with_hash(next_id++, 4u), 200u + i));
+        for (int i = 0; i < 8; ++i) EXPECT(table.insert(make_key_with_hash(next_id++, 8u), 300u + i));
+        table.take_changes();
+        const auto before = table.build_gpu_buffer();
+
+        bool rejected = false;
+        try { table.insert(make_key_with_hash(next_id++, 0u), 999); }
+        catch (const std::length_error&) { rejected = true; }
+        EXPECT(rejected);
+        EXPECT(table.size() == 16);
+        EXPECT(table.capacity() == 64);
+        EXPECT(table.build_gpu_buffer() == before);
+        const auto changes = table.take_changes();
+        EXPECT(!changes.all && changes.slots.empty());
+    }
+    // Wraparound in 32-bit hash space (0xFFFFFFFF -> 0).
+    {
+        DescriptorTable table(32);
+        EXPECT(table.insert(make_key_with_hash(next_id++, 0xFFFFFFFFu), 10));
+        for (int i = 0; i < 8; ++i) EXPECT(table.insert(make_key_with_hash(next_id++, 0u), 20u + i));
+        table.take_changes();
+        const auto before = table.build_gpu_buffer();
+
+        bool rejected = false;
+        try { table.insert(make_key_with_hash(next_id++, 0xFFFFFFFFu), 99); }
+        catch (const std::length_error&) { rejected = true; }
+        EXPECT(rejected);
+        EXPECT(table.size() == 9);
+        EXPECT(table.capacity() == 32);
+        EXPECT(table.build_gpu_buffer() == before);
+        const auto changes = table.take_changes();
+        EXPECT(!changes.all && changes.slots.empty());
+    }
+    // False-positive guard: hash 32 collides at mod-32 slot 0, not in full 32-bit hash space; growing resolves it.
+    {
+        DescriptorTable table(32);
+        std::vector<std::pair<DescriptorKey, std::uint32_t>> inserted;
+        for (int i = 0; i < 8; ++i) {
+            const DescriptorKey k = make_key_with_hash(next_id++, 1u);
+            inserted.push_back({k, 100u + i});
+            EXPECT(table.insert(k, 100u + i));
+        }
+        const DescriptorKey mod_alias = make_key_with_hash(next_id++, 32u);
+        inserted.push_back({mod_alias, 500});
+        EXPECT(table.insert(mod_alias, 500));
+        const DescriptorKey zero_key = make_key_with_hash(next_id++, 0u);
+        inserted.push_back({zero_key, 600});
+        EXPECT(table.insert(zero_key, 600));
+        EXPECT(table.capacity() == 64);
+        EXPECT(table.size() == 10);
+        for (const auto& [k, v] : inserted) EXPECT(table.lookup(k) == v);
+    }
+    return 0;
+}
+
+int test_multihop_relocation_fits_without_growth() {
+    auto shader_lookup = [](const std::vector<std::uint32_t>& gpu_buf, const std::uint32_t key[8]) -> std::uint32_t {
+        const std::uint32_t mask = gpu_buf[0];
+        const std::uint32_t h = hash_descriptor_key(key);
+        for (std::uint32_t k = 0; k < kDescriptorProbes; ++k) {
+            const std::uint32_t slot = (h + k) & mask;
+            const std::size_t base = 1 + std::size_t(slot) * 10;
+            if (gpu_buf[base + 9] == kSlotOccupiedMarker && std::memcmp(&gpu_buf[base], key, 8 * sizeof(std::uint32_t)) == 0)
+                return gpu_buf[base + 8];
+        }
+        return 0;
+    };
+    auto apply_and_check = [&](DescriptorTable& table, std::vector<std::uint32_t>& gpu, std::size_t min_slots) -> int {
+        const DescriptorTable::Changes changes = table.take_changes();
+        EXPECT(!changes.all && changes.slots.size() >= min_slots);
+        for (const std::uint32_t slot : changes.slots) EXPECT(table.read_slot(slot, &gpu[1 + std::size_t(slot) * 10]));
+        EXPECT(gpu == table.build_gpu_buffer());
+        return 0;
+    };
+
+    std::uint32_t next_id = 1;
+    // Subcase A: 2-hop non-wrapping chain at capacity 32.
+    {
+        DescriptorTable table(32);
+        std::vector<std::pair<DescriptorKey, std::uint32_t>> keys;
+        auto put = [&](std::uint32_t h, std::uint32_t val) {
+            const DescriptorKey k = make_key_with_hash(next_id++, h);
+            keys.push_back({k, val});
+            return table.insert_or_update(k.data(), val);
+        };
+        EXPECT(put(0u, 10) == DescriptorTable::InsertResult::added);
+        for (int i = 0; i < 7; ++i) EXPECT(put(1u, 100u + i) == DescriptorTable::InsertResult::added);
+        for (int i = 0; i < 7; ++i) EXPECT(put(8u, 200u + i) == DescriptorTable::InsertResult::added);
+        table.take_changes();
+        auto gpu = table.build_gpu_buffer();
+
+        EXPECT(put(0u, 300) == DescriptorTable::InsertResult::added_with_relocation);
+        EXPECT(table.capacity() == 32 && table.size() == 16);
+        EXPECT(apply_and_check(table, gpu, 3) == 0);
+        for (const auto& [k, v] : keys) {
+            EXPECT(table.lookup(k) == v);
+            EXPECT(shader_lookup(gpu, k.data()) == v);
+        }
+        EXPECT(put(24u, 400) == DescriptorTable::InsertResult::added);
+        EXPECT(table.capacity() == 64 && table.size() == 17);
+        for (const auto& [k, v] : keys) EXPECT(table.lookup(k) == v);
+    }
+    // Subcase B: 2-hop wrapping across both 0xFFFFFFFF->0 and table end 31->0 at capacity 32.
+    {
+        DescriptorTable table(32);
+        std::vector<std::pair<DescriptorKey, std::uint32_t>> keys;
+        auto put = [&](std::uint32_t h, std::uint32_t val) {
+            const DescriptorKey k = make_key_with_hash(next_id++, h);
+            keys.push_back({k, val});
+            return table.insert_or_update(k.data(), val);
+        };
+        EXPECT(put(0xFFFFFFFDu, 10) == DescriptorTable::InsertResult::added);
+        for (int i = 0; i < 7; ++i) EXPECT(put(0xFFFFFFFEu, 100u + i) == DescriptorTable::InsertResult::added);
+        for (int i = 0; i < 7; ++i) EXPECT(put(5u, 200u + i) == DescriptorTable::InsertResult::added);
+        table.take_changes();
+        auto gpu = table.build_gpu_buffer();
+
+        EXPECT(put(0xFFFFFFFDu, 300) == DescriptorTable::InsertResult::added_with_relocation);
+        EXPECT(table.capacity() == 32 && table.size() == 16);
+        EXPECT(apply_and_check(table, gpu, 3) == 0);
+        for (const auto& [k, v] : keys) {
+            EXPECT(table.lookup(k) == v);
+            EXPECT(shader_lookup(gpu, k.data()) == v);
+        }
+    }
+    // Subcase C: 3-hop chain at capacity 64.
+    {
+        DescriptorTable table(64);
+        std::vector<std::pair<DescriptorKey, std::uint32_t>> keys;
+        auto put = [&](std::uint32_t h, std::uint32_t val) {
+            const DescriptorKey k = make_key_with_hash(next_id++, h);
+            keys.push_back({k, val});
+            return table.insert_or_update(k.data(), val);
+        };
+        EXPECT(put(0u, 10) == DescriptorTable::InsertResult::added);
+        for (int i = 0; i < 7; ++i) EXPECT(put(1u, 100u + i) == DescriptorTable::InsertResult::added);
+        for (int i = 0; i < 7; ++i) EXPECT(put(8u, 200u + i) == DescriptorTable::InsertResult::added);
+        for (int i = 0; i < 7; ++i) EXPECT(put(15u, 300u + i) == DescriptorTable::InsertResult::added);
+        table.take_changes();
+        auto gpu = table.build_gpu_buffer();
+
+        EXPECT(put(0u, 400) == DescriptorTable::InsertResult::added_with_relocation);
+        EXPECT(table.capacity() == 64 && table.size() == 23);
+        EXPECT(apply_and_check(table, gpu, 4) == 0);
+        for (const auto& [k, v] : keys) {
+            EXPECT(table.lookup(k) == v);
+            EXPECT(shader_lookup(gpu, k.data()) == v);
+        }
+    }
+    return 0;
+}
+
 int main() {
+    EXPECT(test_unresolvable_collision_at_half_load_does_not_grow() == 0);
+    EXPECT(test_all_changed_suppresses_redundant_slot_list() == 0);
+    EXPECT(test_unresolvable_adjacent_hash_cluster_rejected_without_growth() == 0);
+    EXPECT(test_multihop_relocation_fits_without_growth() == 0);
     EXPECT(test_unresolvable_hash_collision() == 0);
     EXPECT(test_capacity_overflow() == 0);
     EXPECT(test_fnv1a_hash_matches_contract() == 0);

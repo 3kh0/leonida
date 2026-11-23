@@ -429,6 +429,34 @@ class TestConditionCodesAndStatus(unittest.TestCase):
         self.assertFalse(s_pos.zero)
         self.assertFalse(s_pos.negative)
 
+class TestIEEE754BoundaryExtremes(unittest.TestCase):
+    def test_float_bit_patterns_treated_as_raw_bits(self):
+        # 0.0 (+0.0) is 0x00000000, -0.0 is 0x80000000
+        # +0.0 | -0.0 | 1.0 (0x3F800000) -> 0xBF800000 (-1.0 bits)
+        r = ref_or3_b32(0x00000000, 0x80000000, 0x3F800000)
+        self.assertEqual(r, 0xBF800000)
+
+        words = run_ps_or3([
+            "v_mov_b32 v0, 0x00000000",
+            "v_mov_b32 v1, 0x80000000",
+            "v_mov_b32 v2, 0x3F800000",
+            "v_or3_b32 v3, v0, v1, v2",
+        ])
+        self.assertEqual(words[0], 0xBF800000)
+
+    def test_nan_and_inf_bit_patterns(self):
+        # +inf (0x7F800000) | -inf (0xFF800000) | qnan (0x7FC00000)
+        r = ref_or3_b32(0x7F800000, 0xFF800000, 0x7FC00000)
+        self.assertEqual(r, 0xFFC00000)
+
+        words = run_ps_or3([
+            "v_mov_b32 v0, 0x7F800000",
+            "v_mov_b32 v1, 0xFF800000",
+            "v_mov_b32 v2, 0x7FC00000",
+            "v_or3_b32 v3, v0, v1, v2",
+        ])
+        self.assertEqual(words[0], 0xFFC00000)
+
 
 if __name__ == "__main__":
     unittest.main()

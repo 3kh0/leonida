@@ -613,5 +613,35 @@ class TestFrexpMantF32IEEE754Handling(unittest.TestCase):
             self.assertEqual(ref_frexp_mant_f32(val), val)
 
 
+# ------------------------------------------------------------------------------
+# v_frexp_mant_f32 Negative Controls and Translator Hardware Execution
+# ------------------------------------------------------------------------------
+
+class TestFrexpMantF32RejectionAndHardwareTranslator(unittest.TestCase):
+    def test_hardware_translator_execution(self):
+        cases = [
+            (f32_to_bits(1.0), f32_to_bits(0.5)),
+            (f32_to_bits(2.0), f32_to_bits(0.5)),
+            (f32_to_bits(-1.0), f32_to_bits(-0.5)),
+            (POS_ZERO, POS_ZERO),
+            (NEG_ZERO, NEG_ZERO),
+            (POS_INF, POS_INF),
+            (NEG_INF, NEG_INF),
+            (QNAN, QNAN),
+            (0x0000_0001, POS_ZERO),
+            (0x8000_0001, NEG_ZERO),
+        ]
+        for src_val, expected in cases:
+            prog = [
+                f"v_mov_b32 v1, {src_val:#x}",
+                "v_frexp_mant_f32 v0, v1",
+                "exp mrt0 v0, v0, v0, v0 done vm",
+                "s_endpgm",
+            ]
+            spv = support.translate_lines("ps_frexp_mant_hw_test", prog)
+            words = support.mrt0_words(spv)
+            self.assertEqual(words[0], expected, f"Failed on {src_val:#x}: got {words[0]:#x}, expected {expected:#x}")
+
+
 if __name__ == '__main__':
     unittest.main()

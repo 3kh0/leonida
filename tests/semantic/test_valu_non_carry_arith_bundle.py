@@ -406,6 +406,13 @@ class TestVSubrevNcU32AST(unittest.TestCase):
         expr_cl = VSubrevNcU32Expr(80, 20, clamp=True)
         self.assertEqual(expr_cl.eval(), 0)
 
+class TestVSubrevNcU32SIMD(unittest.TestCase):
+    def test_simd_lane_divergence(self) -> None:
+        # Diverging subtractions: lane i computes 1000 - (i * 20)
+        for l in range(32):
+            got = ref_v_subrev_nc_u32(l * 20, 1000)
+            self.assertEqual(got, 1000 - l * 20)
+
 
 if __name__ == "__main__":
     unittest.main()

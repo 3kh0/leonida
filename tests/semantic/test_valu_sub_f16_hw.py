@@ -556,5 +556,28 @@ class TestSubF16StatusFlags(unittest.TestCase):
         self.assertEqual(wave.exec_mask, original_mask)
 
 
+# ==============================================================================
+# IEEE 754 Boundary Extremes, Subnormals, and NaN Handling
+# ==============================================================================
+
+class TestSubF16IEEE754Boundaries(unittest.TestCase):
+    def test_subnormal_numbers(self):
+        # 2^-14 - 2^-24 = largest subnormal
+        self.assertEqual(ref_sub(MIN_NORMAL, MIN_SUB), MAX_SUB)
+        # 2^-24 - -2^-24 = 2^-23 (0x0002)
+        self.assertEqual(ref_sub(MIN_SUB, 0x8001), 0x0002)
+
+    def test_quiet_and_signaling_nans(self):
+        self.assertTrue(is_nan(ref_sub(SNAN, ONE)))
+        self.assertTrue(is_nan(ref_sub(ONE, SNAN)))
+        self.assertTrue(is_nan(ref_sub(QNAN, SNAN)))
+
+    def test_overflow_and_underflow(self):
+        # 65504 - -65504 overflows to +inf
+        self.assertEqual(ref_sub(MAX_NORMAL, 0xFBFF), POS_INF)
+        # -65504 - 65504 underflows to -inf
+        self.assertEqual(ref_sub(0xFBFF, MAX_NORMAL), NEG_INF)
+
+
 if __name__ == '__main__':
     unittest.main()

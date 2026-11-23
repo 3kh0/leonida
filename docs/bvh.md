@@ -123,8 +123,14 @@ So the "`u16` table at header `0x130`" of section 4 is not a table: it is these 
 (a root pointer, the element offset and the parent offset, the last usually negative; hence "often monotonic"). With `offsetToPrimRemap` 0 everywhere there is no
 primitive remap table either, and the element region allocates 64 bytes per element, `numElements` of them, padded
 to 128 bytes (a stride, not a record layout: section 4a describes the packed arrays inside it).
-**Open:** where the parent array starts and how big it is. Neither `offsetToParents + 4 * unit` against the header end
-or `offsetToElements`, nor a size of `4 *` the node or element count, holds on every stream.
+**The parent table is not shipped.** The bytes from the header end (`0x40`) to `offsetToElements`, the only place
+§7's formula can store entries, are all zero on 272,864 / 272,864 streams (271,627 + 1,237; inflated up to
+`0x100 + offsetToElements` and read as dwords). These are offline, dehydrated BLASes (§3), so the table is written
+at rehydration; §7's rehydrated samples have the root entry `0xFFFFFFFF`. Where it ends is set only loosely by the
+header: with `units = (64 * (totalSizeIn64BNodes + 1) - offsetToElements) / 64`, the formula's last entry
+`offsetToParents + 4 * units` rounded up to 128 equals `offsetToElements` on 259,463 streams, and on the others
+the reserved space is a few entries short or long (the entry count minus `units` takes 34 values, from -3 up). A
+rehydrator therefore sizes the table from the tree it rebuilds, not from these words.
 
 The `flags` word has version `6` in its low 16 bits. It also sets `0x80000000` (bottom level), `0x00020000`
 (offline) and `0x01000000` (dehydrated). It does not set `0x00010000` (compressed). The sample is therefore a

@@ -29,6 +29,7 @@ import base64
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -360,6 +361,8 @@ def parse_junit(text):
             try:
                 secs = float(tc.get("time")) if tc.get("time") else None
             except ValueError:
+                secs = None
+            if secs is not None and not math.isfinite(secs):
                 secs = None
             detail = scrub((fail.get("message") or "") if fail is not None else "")
             out.append((name, res, secs, detail))

@@ -83,6 +83,29 @@ and error classes, keeping the local shader files and reports that identify them
 
 [interfaces]: https://docs.vulkan.org/spec/latest/chapters/interfaces.html#interfaces-iointerfaces-matching
 
+### Count stored passes affected by each link result
+
+Use the pass rows exported by `sgd5_pass_pipelines.py --passes`, the exact manifest
+supplied to the batch checker, and its JSON report. The checker identifies results
+by manifest name, so reusing a name in a different manifest can give a wrong match.
+
+```powershell
+python -I tools/sgd5_pass_link_summary.py passes.json pairs.json link-report.json
+```
+
+The JSON summary counts each complete stage chain once under `distinct` and once
+per stored pass under `occurrences`, including passes with different render states.
+For diagnostics, these columns count individual problems of each kind at the same
+two weights. A chain with two missing outputs and three stored passes contributes
+two and six missing-output diagnostics.
+
+The denominator is the exported rows. The exporter can omit passes with no program
+or an unresolved carve entry before writing those rows. Compute, pixel-less and
+unsupported chains in the export have separate outcome counts. A supported chain
+outside the supplied manifest is `missing-manifest`; a manifest entry without a
+batch result is `missing-result`. A module read or reflection error reported by the
+checker retains its `invalid` status.
+
 ## Audit wave fidelity for the target GPU
 
 The subgroup audit combines the translator's wave-width and partition-invariance metadata with

@@ -768,6 +768,11 @@ def main(argv=None) -> int:
             ]
     with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(manifest, f, indent=1)
+    # A previous draw no longer belongs to the newly prepared manifest.
+    try:
+        os.unlink(os.path.join(out_dir, "image.raw"))
+    except FileNotFoundError:
+        pass
     print(f"{len(vertices)} vertices, {len(indices) // 3} triangles -> {out_dir}")
     if not (a.run or a.check):
         env_preview = harness_env(manifest, out_dir, base_env={})

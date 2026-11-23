@@ -646,6 +646,9 @@ struct ShaderEntry {
     // against the device's maxMeshOutputVertices / maxMeshOutputPrimitives when a pipeline is created. 0: not given.
     std::uint32_t max_vertices = 0;
     std::uint32_t max_primitives = 0;
+    // The S#s the shader builds from immediates (the index's literal_samplers): no heap slot names them, so a
+    // pipeline that uses the shader registers them in the bindless set itself (docs/design.md, Literal samplers).
+    std::vector<std::array<std::uint32_t, 4>> literal_samplers;
 };
 
 class ShaderLibrary {
@@ -819,6 +822,14 @@ private:
             }
             e.max_vertices = u32(meta.find("max_vertices"));
             e.max_primitives = u32(meta.find("max_primitives"));
+            if (const Json* l = meta.find("literal_samplers"); l && l->kind == Json::Kind::array) {
+                for (const Json& item : l->array) {
+                    if (item.kind != Json::Kind::array || item.array.size() != 4) continue;
+                    std::array<std::uint32_t, 4> words{};
+                    for (std::size_t i = 0; i < 4; ++i) words[i] = u32(&item.array[i]);
+                    e.literal_samplers.push_back(words);
+                }
+            }
             if (by_fspx) fspx_entries_[{e.stage, e.fspx_code_sha256}].push_back(e);
             if (by_fssm) entries_[{e.stage, e.fssm_sha256}].push_back(std::move(e));
             if (by_fspx && prefix == "fspx/") ++fspx_count_;

@@ -345,5 +345,21 @@ class VDot4I32I8TranslatorIntegrationTests(unittest.TestCase):
         unsigned_res = ref_dot4_u32_u8(s0, s1, 0)
         self.assertNotEqual(signed_res, unsigned_res)
 
+class VDot4U32U8OracleTests(unittest.TestCase):
+    """Reference mathematical oracle tests for v_dot4_u32_u8."""
+
+    def test_unsigned_bytes(self):
+        s0 = 0xFF000000  # highest byte is 255
+        s1 = 0x01000000  # highest byte is 1
+        res = ref_dot4_u32_u8(s0, s1, 0)
+        self.assertEqual(res, 255)
+
+    def test_all_bytes_active(self):
+        s0 = 0x02020202
+        s1 = 0x03030303
+        res = ref_dot4_u32_u8(s0, s1, 10)
+        # 4 * (2 * 3) + 10 = 24 + 10 = 34
+        self.assertEqual(res, 34)
+
 if __name__ == "__main__":
     unittest.main()

@@ -182,6 +182,25 @@ class TestVFmacF32Accumulator(unittest.TestCase):
         words = run_bundle_ps(lines, "ps_fmac_chain")
         self.assertEqual(words[0], 0x41500000)
 
+class TestVFmacF32IEEEEdgeCases(unittest.TestCase):
+    """Stage 4 for v_fmac_f32: boundary extremes and signed zero handling."""
+
+    def test_v_fmac_f32_edge_cases(self):
+        cases = [
+            (0x00000000, 0x40800000, 0x40A00000, 0x41A00000),  # 0.0 + 4.0 * 5.0 = 20.0
+            (0xC0A00000, 0x40000000, 0x40400000, 0x3F800000),  # -5.0 + 2.0 * 3.0 = 1.0
+        ]
+        for v0_in, v1_in, v2_in, expected in cases:
+            with self.subTest(v0_in=hex(v0_in), v1_in=hex(v1_in), v2_in=hex(v2_in)):
+                lines = [
+                    f"v_mov_b32 v0, {v0_in:#x}",
+                    f"v_mov_b32 v1, {v1_in:#x}",
+                    f"v_mov_b32 v2, {v2_in:#x}",
+                    "v_fmac_f32 v0, v1, v2",
+                ]
+                words = run_bundle_ps(lines, f"ps_ieee_fmac_{v0_in:#x}")
+                self.assertEqual(words[0], expected)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -100,6 +100,23 @@ class TestSCSelectB32EdgeCases(unittest.TestCase):
             expected_lane = 1 if scc == 1 else 0
             self.assertTrue(all(bit == expected_lane for bit in lanes))
 
+class TestSCSelectB32Translator(unittest.TestCase):
+    def test_translate_s_cselect_b32_scc1_and_scc0(self):
+        lines = [
+            "s_cmp_eq_u32 5, 5",
+            "s_cselect_b32 s0, 0x12345678, 0x87654321",
+            "v_mov_b32 v0, s0",
+            "s_cmp_lg_u32 5, 5",
+            "s_cselect_b32 s1, 0x12345678, 0x87654321",
+            "v_mov_b32 v1, s1",
+            "exp mrt0 v0, v1, v0, v1 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_csel32", lines)
+        self.assertIn("OpEntryPoint", spv)
+        words = mrt0_words(spv)
+        self.assertEqual(words, [0x12345678, 0x87654321, 0x12345678, 0x87654321])
+
 
 if __name__ == "__main__":
     unittest.main()

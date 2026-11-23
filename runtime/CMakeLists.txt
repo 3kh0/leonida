@@ -1037,7 +1037,9 @@ if(TARGET Vulkan::Headers)
     if(Python3_FOUND)
       add_test(NAME xdxr_build_check COMMAND "${Python3_EXECUTABLE}" -I
                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/xdxr_bvh.py" check-build "${LEONIDA_XDXR_OUT}" --rays 1000)
-      set_tests_properties(xdxr_build_check PROPERTIES FIXTURES_REQUIRED xdxr_build_cases SKIP_RETURN_CODE 77)
+      # check-build traces float32 edge and vertex rays through every BLAS case too (tools/xdxr_bvh32.py): about 90 s on
+      # an RTX 5080 host, so a bound well above it
+      set_tests_properties(xdxr_build_check PROPERTIES FIXTURES_REQUIRED xdxr_build_cases SKIP_RETURN_CODE 77 TIMEOUT 600)
     endif()
   endif()
   # VulkanQueue/VulkanContext query-state synchronization (remove_query_pool vs commit, cross-queue plan/commit)
@@ -1266,7 +1268,8 @@ if(TARGET Vulkan::Headers)
     if(Python3_FOUND)
       add_test(NAME d3d12_xdxr_rt_check COMMAND "${Python3_EXECUTABLE}" -I
                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/xdxr_bvh.py" check-build "${LEONIDA_D3D12_XDXR_OUT}" --rays 1000)
-      set_tests_properties(d3d12_xdxr_rt_check PROPERTIES FIXTURES_REQUIRED d3d12_xdxr_cases SKIP_RETURN_CODE 77)
+      set_tests_properties(d3d12_xdxr_rt_check PROPERTIES FIXTURES_REQUIRED d3d12_xdxr_cases SKIP_RETURN_CODE 77
+                           TIMEOUT 600)
     endif()
 
     # GCL8's QueryInterface and its one method need an allocator and a list, not a Vulkan device.

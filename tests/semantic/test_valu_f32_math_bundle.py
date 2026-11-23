@@ -290,5 +290,38 @@ class TestFractF32RejectionAndHardwareTranslator(unittest.TestCase):
             self.assertEqual(words[0], expected, f"Failed on {src_val:#x}: got {words[0]:#x}, expected {expected:#x}")
 
 
+# ------------------------------------------------------------------------------
+# v_frexp_exp_i32_f32 Reference Oracle
+# ------------------------------------------------------------------------------
+
+def ref_frexp_exp_i32_f32(src: int) -> int:
+    u = src & MASK32
+    e = (u >> EXP_SHIFT32) & EXP_MASK32
+    if 1 <= e <= 254:
+        exp = e - 126
+        return exp & MASK32
+    return 0
+
+
+class TestFrexpExpI32F32Oracle(unittest.TestCase):
+    def test_powers_of_two(self):
+        self.assertEqual(ref_frexp_exp_i32_f32(f32_to_bits(1.0)), 1)
+        self.assertEqual(ref_frexp_exp_i32_f32(f32_to_bits(0.5)), 0)
+        self.assertEqual(ref_frexp_exp_i32_f32(f32_to_bits(2.0)), 2)
+        self.assertEqual(ref_frexp_exp_i32_f32(f32_to_bits(0.25)), 0xFFFF_FFFF)
+
+    def test_sign_invariance(self):
+        self.assertEqual(ref_frexp_exp_i32_f32(f32_to_bits(-1.0)), 1)
+        self.assertEqual(ref_frexp_exp_i32_f32(f32_to_bits(-2.0)), 2)
+
+    def test_specials_yield_zero(self):
+        self.assertEqual(ref_frexp_exp_i32_f32(POS_ZERO), 0)
+        self.assertEqual(ref_frexp_exp_i32_f32(NEG_ZERO), 0)
+        self.assertEqual(ref_frexp_exp_i32_f32(POS_INF), 0)
+        self.assertEqual(ref_frexp_exp_i32_f32(NEG_INF), 0)
+        self.assertEqual(ref_frexp_exp_i32_f32(QNAN), 0)
+        self.assertEqual(ref_frexp_exp_i32_f32(0x0000_0001), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

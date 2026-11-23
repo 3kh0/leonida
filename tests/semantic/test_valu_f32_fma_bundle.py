@@ -98,6 +98,26 @@ class TestVFmaF32ASTAndInterpreter(unittest.TestCase):
         words = run_bundle_ps(lines, "ps_exec_v_fma_f32")
         self.assertEqual(words[0], 0x40E00000)
 
+class TestVFmaF32SIMDDivergence(unittest.TestCase):
+    """Stage 3 for v_fma_f32: multi-lane divergence under varied inputs."""
+
+    def test_v_fma_f32_simd_divergence(self):
+        lane_inputs = [
+            (0x3F800000, 0x40000000, 0x40400000, 0x40A00000),  # 1.0 * 2.0 + 3.0 = 5.0
+            (0x40000000, 0x40400000, 0x40800000, 0x41200000),  # 2.0 * 3.0 + 4.0 = 10.0
+            (0x40800000, 0x3F000000, 0x3F800000, 0x40400000),  # 4.0 * 0.5 + 1.0 = 3.0
+        ]
+        for s0, s1, s2, expected in lane_inputs:
+            with self.subTest(s0=hex(s0), s1=hex(s1), s2=hex(s2)):
+                lines = [
+                    f"v_mov_b32 v1, {s0:#x}",
+                    f"v_mov_b32 v2, {s1:#x}",
+                    f"v_mov_b32 v3, {s2:#x}",
+                    "v_fma_f32 v0, v1, v2, v3",
+                ]
+                words = run_bundle_ps(lines, f"ps_simd_fma_{s0:#x}")
+                self.assertEqual(words[0], expected)
+
 
 if __name__ == '__main__':
     unittest.main()

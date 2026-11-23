@@ -87,6 +87,22 @@ class Tests(unittest.TestCase):
                  '<testcase classname="tests.a" name="t[1_2]"><skipped/></testcase></testsuite></testsuites>'
         self.assertEqual([(n, r) for n, r, _, _ in pd.parse_junit(pytest)], [("tests.a::t[1-2]", "pass"), ("tests.a::t[1_2]", "skip")])
 
+    def test_junit_nonfinite_times_do_not_break_json(self):
+        report = (
+            '<testsuite>'
+            '<testcase name="bad-time" time="NaN"><failure message="failed"/></testcase>'
+            '<testcase name="overflow" time="1e999"><skipped/></testcase>'
+            '<testcase name="finite" time="0.125"/>'
+            '</testsuite>'
+        )
+        rows = pd.parse_junit(report)
+        json.dumps(rows, allow_nan=False)
+        self.assertEqual(rows, [
+            ("bad-time", "fail", None, "failed"),
+            ("overflow", "skip", None, ""),
+            ("finite", "pass", 0.125, ""),
+        ])
+
     def test_lasttest_log(self):
         log = "Start testing: Nov 22 10:00 X\n1/2 Test: loader\nTest time =   0.91 sec\nTest Passed.\n2/2 Test: xmem\nTest Failed.\n"
         self.assertEqual(pd.parse_lasttest(log), [("loader", "pass", 0.91), ("xmem", "fail", None)])

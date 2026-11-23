@@ -579,5 +579,51 @@ class TestSubF16IEEE754Boundaries(unittest.TestCase):
         self.assertEqual(ref_sub(0xFBFF, MAX_NORMAL), NEG_INF)
 
 
+# ==============================================================================
+# Negative Controls, Rejection, and Translator Hardware Execution
+# ==============================================================================
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+import support
+
+
+class TestSubF16RejectionAndHardwareTranslator(unittest.TestCase):
+    def test_syntax_rejection_negative_controls(self):
+        with self.assertRaises(ValueError):
+            LiteralOperand(-5)
+        with self.assertRaises(ValueError):
+            RegisterOperand(OperandType.VGPR, 300)
+
+    def test_hardware_translator_execution(self):
+        """Validates that tools/rdna2spirv.py translates v_sub_f16 and matches hardware expectations."""
+        cases = [
+            (THREE, ONE, "v_sub_f16 v0, v1, v2", TWO),
+            (ONE, TWO, "v_sub_f16 v0, v1, v2", NEG_ONE),
+            (HALF, QUARTER, "v_sub_f16 v0, v1, v2", QUARTER),
+            (0x3E00, 0x3E00, "v_sub_f16 v0, v1, v2", POS_ZERO),
+            (NEG_ZERO, POS_ZERO, "v_sub_f16 v0, v1, v2", NEG_ZERO),
+            (POS_ZERO, POS_ZERO, "v_sub_f16 v0, v1, v2", POS_ZERO),
+            (POS_ZERO, NEG_ZERO, "v_sub_f16 v0, v1, v2", POS_ZERO),
+            (NEG_ZERO, NEG_ZERO, "v_sub_f16 v0, v1, v2", POS_ZERO),
+            (THREE, ONE, "v_sub_f16_e64 v0, v1, v2 clamp", ONE),
+            (ONE, TWO, "v_sub_f16_e64 v0, v1, v2 clamp", POS_ZERO),
+        ]
+        for s0, s1, asm, expected_lo in cases:
+            prog = [
+                f"v_mov_b32 v0, {OLD:#x}",
+                f"v_mov_b32 v1, {s0:#x}",
+                f"v_mov_b32 v2, {s1:#x}",
+                asm,
+                "exp mrt0 v0, v0, v0, v0 done vm",
+                "s_endpgm",
+            ]
+            spv = support.translate_lines("ps_sub_f16_hw", prog)
+            words = support.mrt0_words(spv)
+            self.assertEqual(words[0] >> 16, OLD >> 16, f"Upper half not preserved for {asm}")
+            self.assertTrue(same_f16(words[0] & MASK16, expected_lo), f"Failed on {asm}: got {words[0]:#x}, expected {expected_lo:#x}")
+
+
 if __name__ == '__main__':
     unittest.main()

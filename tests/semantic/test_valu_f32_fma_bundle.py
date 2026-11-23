@@ -364,6 +364,13 @@ class TestVMadF32DenormAndEdgeCases(unittest.TestCase):
         words = run_bundle_ps(lines, "ps_mad_denorm")
         self.assertEqual(words[0], 0x00000000)
 
+class TestVMadF32TranslatorAndControls(unittest.TestCase):
+    """Stage 4 for v_mad_f32: translator integration and negative controls."""
+
+    def test_v_mad_f32_negative_controls(self):
+        with self.assertRaises(Exception):
+            support.translate_lines("ps_neg_v_mad_f32", ["v_mad_f32", "s_endpgm"])
+
 
 if __name__ == '__main__':
     unittest.main()

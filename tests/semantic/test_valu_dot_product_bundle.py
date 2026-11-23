@@ -508,5 +508,23 @@ class VDot8U32U4OracleTests(unittest.TestCase):
         # 8 * 6 + 10 = 58
         self.assertEqual(res, 58)
 
+class VDot8U32U4AstInterpreterTests(unittest.TestCase):
+    """AST modeling and interpreter simulation for v_dot8_u32_u4."""
+
+    def test_ast_emission(self):
+        node = DotAstNode("v_dot8_u32_u4", "v3", "v0", "v1", "v2")
+        self.assertEqual(node.emit_asm(), "v_dot8_u32_u4 v3, v0, v1, v2")
+
+    def test_interpreter_scalar_simulation(self):
+        regs = {
+            "v0": 0x22222222,
+            "v1": 0x11111111,
+            "v2": 14,
+        }
+        res = ref_dot8_u32_u4(regs["v0"], regs["v1"], regs["v2"])
+        regs["v3"] = res
+        # 8 * 2 + 14 = 30
+        self.assertEqual(regs["v3"], 30)
+
 if __name__ == "__main__":
     unittest.main()

@@ -341,5 +341,63 @@ class TestIEEE754EdgeCases(unittest.TestCase):
         state.step(inst)
         self.assertEqual(state.vgprs[3], 0x00000042)
 
+class TestNegativeControls(unittest.TestCase):
+    def test_reject_sgpr_dest(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_ds_read_b32("ds_read_b32 s1, v2")
+
+    def test_reject_sgpr_addr(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_ds_read_b32("ds_read_b32 v1, s2")
+
+    def test_reject_overflow_offset(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_ds_read_b32("ds_read_b32 v1, v2 offset:65536")
+
+    def test_reject_malformed_syntax(self) -> None:
+        for bad in ("ds_read_b32", "ds_read_b32 v1", "ds_read_b32 v1, v2, v3", "ds_read_b32 v1, v2 offset:"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                parse_ds_read_b32(bad)
+
+
+class TestTranslatorExecution(unittest.TestCase):
+    """Direct translation and execution via support.translate_lines and spirv_mini_interp."""
+
+    def test_translated_ds_read_b32_compute(self) -> None:
+        body = [
+            "v_lshlrev_b32_e32 v1, 3, v0",      # 8 * lane
+            "v_mov_b32_e32 v2, 0x12345678",
+            "ds_write_b32 v1, v2",
+            "s_waitcnt lgkmcnt(0)",
+            "ds_read_b32 v3, v1",
+            "s_waitcnt lgkmcnt(0)",
+            "ds_read_b32 v4, v1 offset:4",
+            "s_waitcnt lgkmcnt(0)",
+        ] + L.store("v3", 0) + L.store("v4", 1)
+
+        mem = L.run(body, lanes=32)
+        for i in range(32):
+            self.assertEqual(L.out(mem, i, 0), 0x12345678, f"lane {i} slot 0")
+            self.assertEqual(L.out(mem, i, 1), 0, f"lane {i} slot 1 (unwritten 0)")
+
+    def test_translated_offset_and_unaligned_reads(self) -> None:
+        # Lane i writes two dwords: 0x11223344 at v1, 0x55667788 at v1 + 4
+        body = [
+            "v_lshlrev_b32_e32 v1, 4, v0",      # 16 * lane
+            "v_mov_b32_e32 v2, 0x11223344",
+            "v_mov_b32_e32 v3, 0x55667788",
+            "ds_write_b32 v1, v2",
+            "ds_write_b32 v1, v3 offset:4",
+            "s_waitcnt lgkmcnt(0)",
+            "ds_read_b32 v5, v1",
+            "ds_read_b32 v6, v1 offset:4",
+            "s_waitcnt lgkmcnt(0)",
+        ] + L.store("v5", 0) + L.store("v6", 1)
+
+        mem = L.run(body, lanes=8)
+        for i in range(8):
+            self.assertEqual(L.out(mem, i, 0), 0x11223344, f"lane {i} @ +0")
+            self.assertEqual(L.out(mem, i, 1), 0x55667788, f"lane {i} @ +4")
+
 if __name__ == "__main__":
     unittest.main()

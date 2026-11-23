@@ -275,6 +275,20 @@ class TestVFmamkF32ReferenceOracle(unittest.TestCase):
         res = oracle_fma_f32(0x40000000, 0x40400000, 0x3F800000)
         self.assertEqual(res, 0x40E00000)
 
+class TestVFmamkF32ASTAndInterpreter(unittest.TestCase):
+    """Stage 2 for v_fmamk_f32: AST and scalar interpreter execution."""
+
+    def test_v_fmamk_f32_ast_and_execution(self):
+        lines = [
+            "v_mov_b32 v1, 0x40000000",
+            "v_mov_b32 v2, 0x3F800000",
+            "v_fmamk_f32 v0, v1, 0x40400000, v2",
+        ]
+        spv = support.translate_lines("ps_ast_v_fmamk_f32", lines + ["v_mov_b32 v1, 0", "v_mov_b32 v2, 0", "v_mov_b32 v3, 0", "exp mrt0 v0, v1, v2, v3 done vm", "s_endpgm"])
+        self.assertIn("Fma", spv)
+        words = run_bundle_ps(lines, "ps_exec_v_fmamk_f32")
+        self.assertEqual(words[0], 0x40E00000)
+
 
 if __name__ == '__main__':
     unittest.main()

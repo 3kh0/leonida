@@ -397,5 +397,56 @@ class TestSaluOrn2SaveexecB64Aliasing(unittest.TestCase):
                 self.assertEqual(state.get_sgpr_64(i), 0xCAFE0000 + i)
 
 
+
+
+class TestSaluOrn2SaveexecB64ConditionCodes(unittest.TestCase):
+    """Test suite for SCC status flag generation across all boundary scenarios."""
+
+    def test_scc_is_zero_only_when_new_exec_is_zero(self):
+        # s0 == 0 and old_exec == ~0 gives new_exec = 0 | 0 = 0 -> SCC = 0
+        state = ScalarRegisterState(exec_mask=ALL_LANES_ACTIVE)
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(0, 2),
+            src0=ASTOperand.literal64(0),
+        )
+        state.execute(inst)
+        self.assertEqual(state.exec_mask, 0)
+        self.assertEqual(state.scc, 0)
+
+    def test_scc_is_one_when_any_bit_active(self):
+        # Even a single active bit in new_exec yields SCC = 1
+        state = ScalarRegisterState(exec_mask=ALL_LANES_ACTIVE)
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(0, 2),
+            src0=ASTOperand.literal64(0x0000000000000001),
+        )
+        state.execute(inst)
+        self.assertEqual(state.exec_mask, 1)
+        self.assertEqual(state.scc, 1)
+
+    def test_scc_overwrites_prior_flag_state(self):
+        # SCC prior state (1) should be cleared if new_exec is 0
+        state = ScalarRegisterState(exec_mask=ALL_LANES_ACTIVE)
+        state.scc = 1  # Pre-existing condition code
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(0, 2),
+            src0=ASTOperand.literal64(0),
+        )
+        state.execute(inst)
+        self.assertEqual(state.scc, 0)
+
+        # Conversely, pre-existing 0 should become 1
+        inst2 = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(0, 2),
+            src0=ASTOperand.literal64(0xFF),
+        )
+        state.execute(inst2)
+        self.assertEqual(state.scc, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -188,6 +188,14 @@ class TestVAddNcI32WrappingAndSaturation(unittest.TestCase):
         # Min negative + (-1) without clamp wraps to max positive
         self.assertEqual(ref_v_add_nc_i32(0x80000000, 0xFFFFFFFF, clamp=False), 0x7FFFFFFF)
 
+class TestVAddNcI32SIMD(unittest.TestCase):
+    def test_simd_lane_divergence(self) -> None:
+        datas0 = [(l - 16) * 10 for l in range(32)]
+        datas1 = [50 for _ in range(32)]
+        for l in range(32):
+            got = ref_v_add_nc_i32(datas0[l], datas1[l])
+            self.assertEqual(got, (datas0[l] + 50) & MASK32)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -317,6 +317,23 @@ class TestVSubNcI32Oracle(unittest.TestCase):
         self.assertEqual(ref_v_sub_nc_i32(0x80000000, 10, clamp=True), 0x80000000)
         self.assertEqual(ref_v_sub_nc_i32(0x7FFFFFFF, -10, clamp=True), 0x7FFFFFFF)
 
+class VSubNcI32Expr(ASTNode):
+    def __init__(self, src0: int, src1: int, clamp: bool = False) -> None:
+        self.src0 = src0
+        self.src1 = src1
+        self.clamp = clamp
+
+    def eval(self) -> int:
+        return ref_v_sub_nc_i32(self.src0, self.src1, self.clamp)
+
+
+class TestVSubNcI32AST(unittest.TestCase):
+    def test_ast_evaluation(self) -> None:
+        expr = VSubNcI32Expr(400, 150)
+        self.assertEqual(expr.eval(), 250)
+        expr_cl = VSubNcI32Expr(0x80000000, 5, clamp=True)
+        self.assertEqual(expr_cl.eval(), 0x80000000)
+
 
 if __name__ == "__main__":
     unittest.main()

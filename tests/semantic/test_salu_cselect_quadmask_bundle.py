@@ -264,6 +264,18 @@ class TestSQuadmaskB32Interpreter(unittest.TestCase):
         self.assertEqual(state.sgpr[0], 0)
         self.assertEqual(state.scc, 0)
 
+class TestSQuadmaskB32EdgeCases(unittest.TestCase):
+    def test_each_bit_in_nibble(self):
+        for bit_offset in (0, 1, 2, 3):
+            val = (1 << bit_offset)
+            res, scc = ref_s_quadmask_b32(val)
+            self.assertEqual(res, 1)
+            self.assertEqual(scc, 1)
+
+    def test_upper_bits_strictly_zero(self):
+        res, _ = ref_s_quadmask_b32(0xFFFFFFFF)
+        self.assertEqual(res & ~0xFF, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

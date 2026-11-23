@@ -283,6 +283,9 @@ def music_channels(d: bytes, mus, data, collect_packets: bool = True):
                 continue
             packets = opus_packets(d, start, count * 2048)
             if packets is None:
+                if collect_packets:
+                    print(f"WARNING: streamed-music channel {info[c][0]:08X} has an Opus packet crossing its "
+                          "AWC block. Existing Ogg files for this descriptor may be stale.", file=sys.stderr)
                 return []
             repeated = repeated_prefix_packets(packets, previous[c], skip) if skip else 0
             if repeated is None:
@@ -346,6 +349,10 @@ def export_bank(path: str, out_dir: str, pre_skip: int = OPUS_PRE_SKIP):
         at, size = s["data"]
         if s["codec"] == 0x0B and size % 2048 == 0 and s["channels"] in (1, 2):
             pk = opus_packets(d, at, size)
+            ogg = os.path.join(od, stem + ".ogg")
+            if pk is None and os.path.lexists(ogg):
+                print(f"WARNING: keeping existing Ogg {ogg}, which may be stale because an Opus packet "
+                      "crosses its AWC block.", file=sys.stderr)
             if pk:
                 # +0x0C is the per-channel Opus frame count: equal to the +0 count for mono and
                 # half of it for stereo in all 7,451 measured streams. Use it only when it agrees
@@ -354,8 +361,7 @@ def export_bank(path: str, out_dir: str, pre_skip: int = OPUS_PRE_SKIP):
                 frames = s["frames"]
                 if not frames or frames * s["channels"] != s["samples"]:
                     frames = s["samples"] // max(1, s["channels"])
-                write_ogg_opus(os.path.join(od, stem + ".ogg"), pk, s["channels"], s["id"], frames,
-                               pre_skip=pre_skip)
+                write_ogg_opus(ogg, pk, s["channels"], s["id"], frames, pre_skip=pre_skip)
                 counts["opus"] += 1
                 continue
         if s["codec"] == 2 and s["channels"] in (1, 2) and size == s["samples"] * s["channels"] * 4:

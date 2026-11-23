@@ -941,8 +941,18 @@ class MalformedBankTest(unittest.TestCase):
             ]))
             counts = awc.export_bank(str(bank), str(root / "out"))
             self.assertEqual((counts["opus"], counts["pcm"]), (0, 1))
-            self.assertFalse((root / "out" / "synthetic" / "00000001.ogg").exists())
+            output = root / "out" / "synthetic" / "00000001.ogg"
+            self.assertFalse(output.exists())
             self.assertTrue((root / "out" / "synthetic" / "00000002.wav").is_file())
+
+            # Simulate the partial Ogg published by the previous exporter.
+            awc.write_ogg_opus(str(output), [bytes.fromhex("f8fffe")], 1, 1)
+            previous = output.read_bytes()
+            with contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                counts = awc.export_bank(str(bank), str(root / "out"))
+            self.assertEqual((counts["opus"], counts["pcm"]), (0, 1))
+            self.assertEqual(output.read_bytes(), previous)
+            self.assertIn(f"keeping existing Ogg {output}", diagnostic.getvalue())
 
     def test_streamed_packet_crossing_block_keeps_pcm_sibling(self):
         bank = bytearray(build_music_pcm_bank())
@@ -955,8 +965,17 @@ class MalformedBankTest(unittest.TestCase):
             source.write_bytes(bank)
             counts = awc.export_bank(str(source), str(root / "out"))
             self.assertEqual((counts["music"], counts["pcm"]), (0, 1))
-            self.assertFalse((root / "out" / "synthetic" / "00000100.ogg").exists())
+            output = root / "out" / "synthetic" / "00000100.ogg"
+            self.assertFalse(output.exists())
             self.assertTrue((root / "out" / "synthetic" / "00000021.wav").is_file())
+
+            awc.write_ogg_opus(str(output), [bytes.fromhex("f8fffe")], 1, 0x100)
+            previous = output.read_bytes()
+            with contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                counts = awc.export_bank(str(source), str(root / "out"))
+            self.assertEqual((counts["music"], counts["pcm"]), (0, 1))
+            self.assertEqual(output.read_bytes(), previous)
+            self.assertIn("Existing Ogg files for this descriptor may be stale.", diagnostic.getvalue())
 
     def test_truncated_pcm_bank_creates_no_outputs(self):
         pcm = b"\x01\x00" * 4

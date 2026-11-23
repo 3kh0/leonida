@@ -381,6 +381,26 @@ class TestSBitset0B32Reference(unittest.TestCase):
     def test_ref_clear_modulo(self):
         self.assertEqual(ref_s_bitset0_b32(0xFFFFFFFF, 36), 0xFFFFFFEF)
 
+@SaluInterpreterState.register("s_bitset0_b32")
+def _step_bitset0_b32(state: SaluInterpreterState, inst: SaluInstruction) -> int:
+    dst_val = state.sgpr[inst.dst]
+    s0_val = inst.s0 if not isinstance(inst.s0, str) else state.sgpr[int(inst.s0.lstrip("s"))]
+    res = ref_s_bitset0_b32(dst_val, s0_val)
+    state.sgpr[inst.dst] = res
+    return res
+
+
+class TestSBitset0B32Interpreter(unittest.TestCase):
+    def test_interpreter_step_bitset0(self):
+        state = SaluInterpreterState()
+        state.sgpr[0] = 0xFFFFFFFF
+        state.scc = 1
+        inst = SaluInstruction("s_bitset0_b32", dst=0, s0=4)
+        res = state.step(inst)
+        self.assertEqual(res, 0xFFFFFFEF)
+        self.assertEqual(state.sgpr[0], 0xFFFFFFEF)
+        self.assertEqual(state.scc, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

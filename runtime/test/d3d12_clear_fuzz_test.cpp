@@ -190,16 +190,12 @@ float component(std::mt19937_64& rng, DXGI_FORMAT view) {
     }
 }
 
-// What the default programs leave out (--all puts it back), each a known difference with its own entry:
+// What the default programs leave out (--all puts it back), a known difference:
 // - `documented`: ClearUnorderedAccessViewUint bit patterns that runtime/src/uav_clear.h documents as inexact through
 //   vkCmdClearColorImage: an SNORM channel's 0x80.. (written as -1.0, 0x81..) and float NaN patterns (payloads a driver
 //   canonicalises). Such a channel gets its top value bit cleared instead.
-// - `nvidia_stencil`: a stencil clear with rects on a mip past 0. NVIDIA's Vulkan driver (621.14) writes the stencil of
-//   a depth-stencil attachment view of mip > 0 into mip 0 (vkCmdClearAttachments and loadOp CLEAR alike); such a
-//   clear goes to mip 0 instead.
 struct Avoid {
     bool documented = true;
-    bool nvidia_stencil = false;
 };
 
 // A ClearUnorderedAccessViewUint value whose bits uav_clear.h documents as inexact on `view`'s channel `i`, made exact.
@@ -286,13 +282,6 @@ Program generate(std::uint64_t seed, const std::vector<Usable>& use, const Avoid
         }
         if (c.op == Clear::uav_uint && avoid.documented)
             for (UINT k = 0; k < 4; ++k) c.values[k] = avoid_documented(c.view, k, c.values[k]);
-        if (avoid.nvidia_stencil && c.op == Clear::dsv && (c.flags & D3D12_CLEAR_FLAG_STENCIL) && !c.rects.empty()) {
-            c.mip = 0;
-            for (D3D12_RECT& r : c.rects) {  // keep the rects inside mip 0 (they are already: mip 0 is the largest)
-                r.right = std::min<LONG>(r.right, LONG(s.width));
-                r.bottom = std::min<LONG>(r.bottom, LONG(s.height));
-            }
-        }
         p.clears.push_back(c);
     }
     return p;
@@ -745,16 +734,7 @@ int main(int argc, char** argv) {
     const std::vector<Usable> use = usable(layer.Get(), ref.Get(), verbose);
     Avoid avoid;
     if (all) avoid.documented = nan_equal = false;
-    else if (const auto* info = rt::d3d12::vulkan_device_info(layer.Get())) {
-        VkPhysicalDeviceProperties props{};
-        const auto properties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(
-            info->get_instance_proc(info->instance, "vkGetPhysicalDeviceProperties"));
-        if (properties) properties(info->physical, &props);
-        avoid.nvidia_stencil = props.vendorID == 0x10de;
-    }
-    if (!all)
-        std::printf("left out (--all puts them back): uav_clear.h's documented UINT patterns%s\n",
-                    avoid.nvidia_stencil ? "; stencil clears with rects past mip 0 (NVIDIA driver)" : "");
+    else std::puts("left out (--all puts them back): uav_clear.h's documented UINT patterns");
     if (use.empty()) {
         std::puts("SKIP: no format both devices can clear");
         return 77;

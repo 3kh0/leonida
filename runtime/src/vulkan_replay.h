@@ -1002,6 +1002,10 @@ struct Prepared {
     std::vector<std::array<VkDeviceSize, 2>> fills;  // ... buffer byte ranges, offset and size
     VkBuffer fill_scratch = VK_NULL_HANDLE;         // short buffer clears: one repeated 8-byte pattern
     VkDeviceSize fill_scratch_offset = 0;
+    // A stencil clear with rects past mip 0: the stencil value, filled into a scratch range, copied once per rect.
+    std::vector<VkBufferImageCopy> stencil_copies;
+    VkBuffer stencil_scratch = VK_NULL_HANDLE;
+    VkDeviceSize stencil_scratch_offset = 0, stencil_scratch_bytes = 0;
     QueryPool* queries = nullptr;  // query commands: the heap
     ComputePipeline pipeline;  // dispatches
     std::uint32_t draw = 0;    // draws: its PreparedDraw in PreparedList::draws
@@ -2603,6 +2607,34 @@ ReplayResult prepare(const CommandList& list, Resolve&& resolve, const ReplayFun
                 r != ReplayResult::success)
                 return r;
             if (!p.skip && p.rects.empty() && !vk.clear_depth_stencil_image) return ReplayResult::unsupported;
+            // NVIDIA's Vulkan driver (621.14, RTX 5060 Ti) writes the stencil of a depth-stencil attachment view of a
+            // mip past 0 into mip 0, through vkCmdClearAttachments and loadOp CLEAR alike, with no validation message
+            // (issue 5256 has a standalone repro); depth goes to the right mip. So the stencil part of a clear with
+            // rects past mip 0 is copied from a scratch range filled with the stencil value, one copy per rect, which is
+            // exact on every driver. Without scratch it stays on the attachment path.
+            p.stencil_copies.clear();
+            if (!p.skip && !p.rects.empty() && (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) && depth_clear->target.mip > 0 &&
+                vk.copy_buffer_to_image && vk.fill_buffer && vk.copy_scratch) {
+                VkDeviceSize most = 0;
+                for (const VkClearRect& r : p.rects)
+                    most = std::max<VkDeviceSize>(most, VkDeviceSize(r.rect.extent.width) * r.rect.extent.height *
+                                                            r.layerCount);
+                const VkDeviceSize bytes = (most + 3) / 4 * 4;  // vkCmdFillBuffer fills whole words
+                if (bytes && vk.copy_scratch(bytes + 4, p.stencil_scratch, p.stencil_scratch_offset)) {
+                    // A depth/stencil copy's bufferOffset must be a multiple of 4.
+                    p.stencil_scratch_offset += (4 - p.stencil_scratch_offset % 4) % 4;
+                    p.stencil_scratch_bytes = bytes;
+                    for (const VkClearRect& r : p.rects) {
+                        VkBufferImageCopy copy{};
+                        copy.bufferOffset = p.stencil_scratch_offset;
+                        copy.imageSubresource = {VK_IMAGE_ASPECT_STENCIL_BIT, depth_clear->target.mip,
+                                                 depth_clear->target.first_layer + r.baseArrayLayer, r.layerCount};
+                        copy.imageOffset = {r.rect.offset.x, r.rect.offset.y, 0};
+                        copy.imageExtent = {r.rect.extent.width, r.rect.extent.height, 1};
+                        p.stencil_copies.push_back(copy);
+                    }
+                }
+            }
         } else if (const auto* uav = std::get_if<ClearUnorderedAccess>(&command)) {
             const UavView& view = uav->view;
             if (!bind(view.resource)) return ReplayResult::unresolved_resource;
@@ -3477,24 +3509,42 @@ inline void emit(const PreparedList& prepared, VkCommandBuffer command_buffer, c
                 continue;
             }
             const VkImageLayout attachment = image_layout(p.binding, state.layout);
-            detail::round_trip(vk, command_buffer, p.binding, pieces, attachment, state, state.access,
-                               state.stages, [&] {
-                VkRenderingAttachmentInfo info{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-                info.imageView = p.view;
-                info.imageLayout = attachment;
-                info.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-                VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-                rendering.renderArea = {{0, 0}, detail::mip_extent(p.binding, depth_clear->target.mip)};
-                rendering.layerCount = depth_clear->target.layer_count;
-                if (p.range.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) rendering.pDepthAttachment = &info;
-                if (p.range.aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) rendering.pStencilAttachment = &info;
-                vk.begin_rendering(command_buffer, &rendering);
-                VkClearAttachment attachment_clear{p.range.aspectMask, 0, {}};
-                attachment_clear.clearValue.depthStencil = value;
-                vk.clear_attachments(command_buffer, 1, &attachment_clear, std::uint32_t(p.rects.size()), p.rects.data());
-                vk.end_rendering(command_buffer);
-            });
+            // The aspects cleared through the attachment: all of them, or depth only when the stencil is copied.
+            const VkImageAspectFlags attached =
+                p.stencil_copies.empty() ? p.range.aspectMask : (p.range.aspectMask & ~VK_IMAGE_ASPECT_STENCIL_BIT);
+            if (attached)
+                detail::round_trip(vk, command_buffer, p.binding, pieces, attachment, state, state.access,
+                                   state.stages, [&] {
+                    VkRenderingAttachmentInfo info{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                    info.imageView = p.view;
+                    info.imageLayout = attachment;
+                    info.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+                    rendering.renderArea = {{0, 0}, detail::mip_extent(p.binding, depth_clear->target.mip)};
+                    rendering.layerCount = depth_clear->target.layer_count;
+                    if (attached & VK_IMAGE_ASPECT_DEPTH_BIT) rendering.pDepthAttachment = &info;
+                    if (attached & VK_IMAGE_ASPECT_STENCIL_BIT) rendering.pStencilAttachment = &info;
+                    vk.begin_rendering(command_buffer, &rendering);
+                    VkClearAttachment attachment_clear{attached, 0, {}};
+                    attachment_clear.clearValue.depthStencil = value;
+                    vk.clear_attachments(command_buffer, 1, &attachment_clear, std::uint32_t(p.rects.size()),
+                                         p.rects.data());
+                    vk.end_rendering(command_buffer);
+                });
+            if (!p.stencil_copies.empty()) {
+                const std::uint32_t stencil = depth_clear->stencil & 0xffu;
+                vk.fill_buffer(command_buffer, p.stencil_scratch, p.stencil_scratch_offset, p.stencil_scratch_bytes,
+                               stencil * 0x01010101u);
+                detail::memory_barrier(vk, command_buffer, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                       VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                const VkImageLayout copy_layout = image_layout(p.binding, transfer_dst.layout);
+                detail::round_trip(vk, command_buffer, p.binding, pieces, copy_layout, state, transfer_dst.access,
+                                   transfer_dst.stages, [&] {
+                    vk.copy_buffer_to_image(command_buffer, p.stencil_scratch, p.binding.image, copy_layout,
+                                            std::uint32_t(p.stencil_copies.size()), p.stencil_copies.data());
+                });
+            }
         } else if (const auto* uav = std::get_if<ClearUnorderedAccess>(&command)) {
             if (p.skip) continue;
             // The UAV state, widened to transfers: a later barrier from SYNC_CLEAR_UNORDERED_ACCESS_VIEW names the

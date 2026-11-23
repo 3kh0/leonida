@@ -389,6 +389,23 @@ class TestVSubrevNcU32Oracle(unittest.TestCase):
         self.assertEqual(ref_v_subrev_nc_u32(100, 30, clamp=True), 0)
         self.assertEqual(ref_v_subrev_nc_u32(30, 100, clamp=True), 70)
 
+class VSubrevNcU32Expr(ASTNode):
+    def __init__(self, src0: int, src1: int, clamp: bool = False) -> None:
+        self.src0 = src0
+        self.src1 = src1
+        self.clamp = clamp
+
+    def eval(self) -> int:
+        return ref_v_subrev_nc_u32(self.src0, self.src1, self.clamp)
+
+
+class TestVSubrevNcU32AST(unittest.TestCase):
+    def test_ast_evaluation(self) -> None:
+        expr = VSubrevNcU32Expr(20, 80)
+        self.assertEqual(expr.eval(), 60)
+        expr_cl = VSubrevNcU32Expr(80, 20, clamp=True)
+        self.assertEqual(expr_cl.eval(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

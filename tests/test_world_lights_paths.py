@@ -389,6 +389,37 @@ class ScanTest(unittest.TestCase):
         self.assertEqual([row["position"] for row in placements if row["owner"] == "archetype"],
                          [[0.0, 0.0, 0.0], [0.0, 0.1, 0.0], [50.0, 0.0, 0.0], [50.0, 0.1, 0.0]])
 
+    def test_incomplete_entities_preserve_previous_lights(self):
+        lights = os.path.join(self.tmp.name, "lights.jsonl")
+        args = [self.rpf, "--entities", self.entities, "--lights-out", lights]
+        # A sibling with the old staging name may already belong to another writer.
+        sibling = lights + ".partial"
+        with open(sibling, "wb") as f:
+            f.write(b"existing partial")
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(T.main(args), 0)
+        with open(sibling, "rb") as f:
+            self.assertEqual(f.read(), b"existing partial")
+        with open(lights, "rb") as f:
+            previous = f.read()
+        with open(self.entities, "w", encoding="utf-8", newline="\n") as f:
+            f.write('{"archetype":"0badbeef"}\n{')
+        before = set(os.listdir(self.tmp.name))
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(T.main(args), 2)
+        self.assertIn(f"{self.entities}:2:", err.getvalue())
+        with open(lights, "rb") as f:
+            self.assertEqual(f.read(), previous)
+        self.assertEqual(set(os.listdir(self.tmp.name)), before)
+
+        os.remove(lights)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(T.main(args), 2)
+        self.assertFalse(os.path.exists(lights))
+        self.assertEqual(set(os.listdir(self.tmp.name)), before - {"lights.jsonl"})
+        with open(sibling, "rb") as f:
+            self.assertEqual(f.read(), b"existing partial")
+
     def test_scan_and_summary(self):
         total = T.scan(self.rpf)
         summary = T.summarize(total, self.entities)

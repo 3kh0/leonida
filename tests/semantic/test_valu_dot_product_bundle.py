@@ -232,5 +232,18 @@ class VDot2cF32F16AstInterpreterTests(unittest.TestCase):
         # 2*3 + 1*4 + 5 = 6 + 4 + 5 = 15.0
         self.assertAlmostEqual(bits_to_f32(regs["v3"]), 15.0)
 
+class VDot2cF32F16SimdBoundaryTests(unittest.TestCase):
+    """SIMD lane divergence and boundary extremes for v_dot2c_f32_f16."""
+
+    def test_simd_divergent_lanes(self):
+        lanes = 64
+        src0 = [pack_f16x2(1.0, 2.0) for _ in range(lanes)]
+        src1 = [pack_f16x2(float(i), 1.0) for i in range(lanes)]
+        old_ds = [f32_to_bits(float(i)) for i in range(lanes)]
+        out = [ref_dot2_f32_f16(s0, s1, d) for s0, s1, d in zip(src0, src1, old_ds)]
+        for i in range(lanes):
+            expected = 1.0 * float(i) + 2.0 * 1.0 + float(i)
+            self.assertAlmostEqual(bits_to_f32(out[i]), expected)
+
 if __name__ == "__main__":
     unittest.main()

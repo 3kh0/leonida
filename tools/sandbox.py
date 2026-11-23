@@ -62,6 +62,8 @@ def pick_pair(shaders_dir):
     vs = ps = None
     for name in sorted(index):
         e = index[name]
+        if not isinstance(e, dict):
+            continue
         if not os.path.isfile(os.path.join(spirv, name + ".spv")):
             continue
         if (vs is None and e.get("stage") == "vs" and not e.get("bindings")

@@ -63,6 +63,14 @@ class PickPair(unittest.TestCase):
                           "bindings": [0, 1, 2]}, PS_TEXT)
         self.assertEqual(self.names(), ("a_vs", "b_ps"))
 
+    def test_skips_non_object_entries(self):
+        for name, entry in (("array", []), ("boolean", False), ("null", None), ("number", 7), ("string", "x")):
+            self.add(name, entry, "")
+        self.assertIsNone(self.pick())
+        self.add("valid_vs", {"stage": "vs", "input_signature": VS_SIG, "user_sgpr_reads": PTR8, "bindings": []}, VS_TEXT)
+        self.add("valid_ps", {"stage": "ps", "input_signature": PS_SIG, "user_sgpr_reads": PTR8, "bindings": [0, 1, 2]}, PS_TEXT)
+        self.assertEqual(self.names(), ("valid_vs", "valid_ps"))
+
     def test_rejects_wrong_layout_and_signature(self):
         self.add("a_vs", {"stage": "vs", "input_signature": VS_SIG, "user_sgpr_reads": PTR8, "bindings": []},
                  VS_TEXT.replace("0x160", "0x100"))

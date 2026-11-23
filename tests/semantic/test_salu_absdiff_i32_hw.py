@@ -276,5 +276,42 @@ class TestAbsdiffSimdInteraction(unittest.TestCase):
         self.assertEqual(words[1], 20)
 
 
+class TestAbsdiffRegisterPreservation(unittest.TestCase):
+    """Commit 5: register aliasing and in-place operand preservation for s_absdiff_i32."""
+
+    def test_destination_aliased_to_source(self):
+        # s0 = abs(s0 - s1)
+        lines = [
+            "s_mov_b32 s0, 15",
+            "s_mov_b32 s1, 40",
+            "s_absdiff_i32 s0, s0, s1",  # 25
+            "v_mov_b32 v0, s0",
+            "v_mov_b32 v1, s1",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+        ]
+        words = run_absdiff_ps(lines, "ps_absdiff_alias_src0")
+        self.assertEqual(words[0], 25)
+        self.assertEqual(words[1], 40)
+
+    def test_preservation_of_unrelated_sgprs(self):
+        lines = [
+            "s_mov_b32 s0, 0x1111",
+            "s_mov_b32 s1, 0x2222",
+            "s_mov_b32 s2, 0x3333",
+            "s_mov_b32 s3, 0x4444",
+            "s_absdiff_i32 s1, s1, s2",  # abs(0x2222 - 0x3333) = 0x1111
+            "v_mov_b32 v0, s0",
+            "v_mov_b32 v1, s1",
+            "v_mov_b32 v2, s2",
+            "v_mov_b32 v3, s3",
+        ]
+        words = run_absdiff_ps(lines, "ps_absdiff_preserve")
+        self.assertEqual(words[0], 0x1111)
+        self.assertEqual(words[1], 0x1111)
+        self.assertEqual(words[2], 0x3333)
+        self.assertEqual(words[3], 0x4444)
+
+
 if __name__ == '__main__':
     unittest.main()

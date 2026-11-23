@@ -197,5 +197,40 @@ class TestFractF32ScalarInterpreter(unittest.TestCase):
         self.assertEqual(self.machine.vgprs[0], f32_to_bits(0.75))
 
 
+# ------------------------------------------------------------------------------
+# v_fract_f32 SIMD Multi-Lane Divergence and EXEC Masking
+# ------------------------------------------------------------------------------
+
+class SIMDWaveFract:
+    def __init__(self, wave_size: int = 64):
+        self.wave_size = wave_size
+        self.vgprs: List[List[int]] = [[0] * wave_size for _ in range(256)]
+        self.exec_mask: int = (1 << wave_size) - 1
+
+    def step(self, insn: VFractF32Instruction):
+        for lane in range(self.wave_size):
+            if (self.exec_mask >> lane) & 1:
+                val = self.vgprs[insn.src0.index][lane]
+                self.vgprs[insn.dst.index][lane] = ref_fract_f32(val)
+
+
+class TestFractF32SIMDDivergence(unittest.TestCase):
+    def test_divergence_and_exec_masking(self):
+        wave = SIMDWaveFract(wave_size=32)
+        for lane in range(32):
+            wave.vgprs[1][lane] = f32_to_bits(float(lane) + 0.125)
+            wave.vgprs[0][lane] = 0xDEAD_BEEF
+
+        wave.exec_mask = 0x0000_FFFF  # lanes 0..15 active
+        insn = VFractF32Instruction(dst=RegisterOperand(OperandType.VGPR, 0), src0=RegisterOperand(OperandType.VGPR, 1))
+        wave.step(insn)
+
+        for lane in range(32):
+            if lane < 16:
+                self.assertEqual(wave.vgprs[0][lane], f32_to_bits(0.125))
+            else:
+                self.assertEqual(wave.vgprs[0][lane], 0xDEAD_BEEF)
+
+
 if __name__ == '__main__':
     unittest.main()

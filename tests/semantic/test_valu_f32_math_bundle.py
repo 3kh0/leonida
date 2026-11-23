@@ -802,5 +802,22 @@ class TestLdexpF32SIMDDivergence(unittest.TestCase):
             self.assertEqual(wave.vgprs[0][lane], expected)
 
 
+# ------------------------------------------------------------------------------
+# v_ldexp_f32 IEEE 754 Boundary Extremes, Subnormals, and NaN Handling
+# ------------------------------------------------------------------------------
+
+class TestLdexpF32IEEE754Handling(unittest.TestCase):
+    def test_extreme_shift_clamping(self):
+        # Shifts beyond +-512 are clamped and saturate properly
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(1.0), 1000), POS_INF)
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(1.0), -1000), POS_ZERO)
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(-1.0), 1000), NEG_INF)
+        self.assertEqual(ref_ldexp_f32(f32_to_bits(-1.0), -1000), NEG_ZERO)
+
+    def test_subnormal_inputs_flush_to_zero(self):
+        self.assertEqual(ref_ldexp_f32(0x0000_0001, 10), POS_ZERO)
+        self.assertEqual(ref_ldexp_f32(0x8000_0001, 10), NEG_ZERO)
+
+
 if __name__ == '__main__':
     unittest.main()

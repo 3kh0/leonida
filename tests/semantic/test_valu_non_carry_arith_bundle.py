@@ -293,6 +293,30 @@ class TestVSubNcU32Translator(unittest.TestCase):
         for l in range(32):
             self.assertEqual(results[l], 0)
 
+def ref_v_sub_nc_i32(src0: int, src1: int, clamp: bool = False) -> int:
+    """Reference mathematical oracle for v_sub_nc_i32."""
+    s0, s1 = src0 & MASK32, src1 & MASK32
+    i0 = s0 - 0x100000000 if s0 & 0x80000000 else s0
+    i1 = s1 - 0x100000000 if s1 & 0x80000000 else s1
+    diff = i0 - i1
+    if clamp:
+        clamped = max(-0x80000000, min(diff, 0x7FFFFFFF))
+        return clamped & MASK32
+    return diff & MASK32
+
+
+class TestVSubNcI32Oracle(unittest.TestCase):
+    def test_basic_subtraction(self) -> None:
+        self.assertEqual(ref_v_sub_nc_i32(100, 40), 60)
+        self.assertEqual(ref_v_sub_nc_i32(-20, -10), (-10) & MASK32)
+
+    def test_wrapping_signed(self) -> None:
+        self.assertEqual(ref_v_sub_nc_i32(0x80000000, 1), 0x7FFFFFFF)
+
+    def test_clamp_signed(self) -> None:
+        self.assertEqual(ref_v_sub_nc_i32(0x80000000, 10, clamp=True), 0x80000000)
+        self.assertEqual(ref_v_sub_nc_i32(0x7FFFFFFF, -10, clamp=True), 0x7FFFFFFF)
+
 
 if __name__ == "__main__":
     unittest.main()

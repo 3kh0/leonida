@@ -261,5 +261,36 @@ class VFrexpExpI16F16TranslatorTests(unittest.TestCase):
         val = mrt0_words(spv)[0] & MASK16
         self.assertEqual(val, 1)
 
+# -----------------------------------------------------------------------------
+# Opcode 3: v_frexp_mant_f16
+# -----------------------------------------------------------------------------
+def oracle_frexp_mant_f16(u: int) -> int:
+    """Reference mathematical oracle for v_frexp_mant_f16."""
+    u &= MASK16
+    if is_nan_f16(u) or is_inf_f16(u):
+        return u
+    if (u & 0x7FFF) == 0:
+        return u  # preserves +-0.0
+    sgn = u & 0x8000
+    e = (u >> 10) & 0x1F
+    frac = u & 0x03FF
+    if e == 0:
+        # Denormal: normalize frac to bit 10
+        msb = frac.bit_length() - 1
+        lsh = 10 - msb
+        sig11 = (frac << lsh) & 0x07FF
+        return sgn | F16_POS_HALF | (sig11 & 0x03FF)
+    return sgn | F16_POS_HALF | frac
+
+
+class VFrexpMantF16OracleTests(unittest.TestCase):
+    def test_frexp_mant_basic(self):
+        # 1.0 (0x3c00): mantissa is 0.5 (0x3800)
+        self.assertEqual(oracle_frexp_mant_f16(F16_POS_ONE), F16_POS_HALF)
+        # -1.0 (0xbc00): mantissa is -0.5 (0xb800)
+        self.assertEqual(oracle_frexp_mant_f16(F16_NEG_ONE), F16_NEG_HALF)
+        # 3.0: 3.0 = 0.75 * 2^2 -> mantissa is 0.75 (0x3a00)
+        self.assertEqual(oracle_frexp_mant_f16(f16_to_u16(3.0)), 0x3A00)
+
 if __name__ == "__main__":
     unittest.main()

@@ -826,6 +826,7 @@ int part_f(vktest::Device& d) {
         constexpr auto unresolved = ReplayResult::unresolved_resource;
         if (!rejected(write(va_c + c_size), unresolved, vk) ||          // one past c
             !rejected(write(0x40000), unresolved, vk) ||                // no resource there
+            !rejected(write(va_a + 2), ReplayResult::invalid_copy, vk) ||  // unaligned dstOffset
             !rejected(write(va_a), ReplayResult::unsupported, without_update) ||
             !rejected(atomic({b_id, c_offset, a_id, 0, 8, {{a_id, 0, 0, 8}}}), ReplayResult::invalid_copy, vk) ||  // past b
             !rejected(atomic({b_id, 0, a_id, 0, 4, {{99, 0, 0, 4}}}), unresolved, vk) ||

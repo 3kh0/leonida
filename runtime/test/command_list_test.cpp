@@ -179,7 +179,7 @@ int main() {
     CHECK(!list.discard({40, all_subresources, 1, false}));
     CHECK(list.write_immediate({0x1000, 7, write_immediate_mode::marker_out}));
     CHECK(!list.write_immediate({0, 7, 0}));                      // null address
-    CHECK(!list.write_immediate({0x1002, 7, 0}));                 // not 4-byte aligned
+    CHECK(list.write_immediate({0x1002, 9, 0}));                  // unaligned address records; replay enforces 4-byte alignment
     CHECK(!list.write_immediate({0x1000, 7, 3}));                 // not a mode
     const DependentRange dependent{41, 0, 0, 64};
     CHECK(list.atomic_copy({42, 8, 43, 16, 8, {dependent}}));
@@ -192,12 +192,13 @@ int main() {
     CHECK(!list.atomic_copy({0, 8, 43, 16, 4, {dependent}}));
     CHECK(list.close());
     CHECK(!list.discard({40, 0, 0, false, true}) && !list.discard({40, 0, 0, false}));
-    CHECK(list.commands().size() == 5);
+    CHECK(list.commands().size() == 6);
     CHECK(std::get<DiscardResource>(list.commands()[0]).whole);
     CHECK(std::get<DiscardResource>(list.commands()[1]).first_subresource == 2 &&
           std::get<DiscardResource>(list.commands()[1]).partial && !std::get<DiscardResource>(list.commands()[1]).whole);
     CHECK(std::get<WriteImmediate>(list.commands()[2]).value == 7);
-    const auto& atomic = std::get<AtomicCopyBuffer>(list.commands()[3]);
+    CHECK(std::get<WriteImmediate>(list.commands()[3]).address == 0x1002);
+    const auto& atomic = std::get<AtomicCopyBuffer>(list.commands()[4]);
     CHECK(atomic.bytes == 8 && atomic.dst_offset == 8 && atomic.dependencies.size() == 1 &&
           atomic.dependencies[0].end == 64);
 

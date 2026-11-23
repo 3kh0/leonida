@@ -162,6 +162,19 @@ int main() {
                "unpredicated writes: conditional rendering untouched");
     }
 
+    // 3. Unaligned WriteBufferImmediate records and closes cleanly (matching D3D12/WARP), and replay rejects it
+    //    with invalid_copy without invoking vkCmdUpdateBuffer (VUID-vkCmdUpdateBuffer-dstOffset-00032).
+    {
+        Trace trace;
+        g_trace = &trace;
+        CommandList list;
+        expect(list.write_immediate({va_buf + 2, 0xdeadbeef, m::normal}), "record unaligned write");
+        expect(list.close(), "close unaligned write list");
+        expect(replay(list, VK_NULL_HANDLE, resolve, vk) == ReplayResult::invalid_copy,
+               "replay rejects unaligned write with invalid_copy");
+        expect(trace.updates == 0, "unaligned write never invokes vkCmdUpdateBuffer");
+    }
+
     if (failures) return 1;
     std::puts("replay_write_immediate_predication_test: WriteBufferImmediate suspends and restores conditional rendering");
     return 0;

@@ -661,11 +661,15 @@ public:
 
     // GCL2. A null pModes means DEFAULT for every write. The address is resolved when the list is executed.
     // Allowed in a bundle (the API restrictions table of "Recording command lists and bundles").
+    // Windows D3D12 / WARP rejects unaligned Dest at Close() when pModes is explicit (DEFAULT, MARKER_IN, MARKER_OUT),
+    // but accepts unaligned Dest when pModes is nullptr (which is rejected at replay before vkCmdUpdateBuffer).
     void STDMETHODCALLTYPE WriteBufferImmediate(UINT count, const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER* params,
                                                 const D3D12_WRITEBUFFERIMMEDIATE_MODE* modes) override {
         if (count && !params) return check(false);
-        for (UINT i = 0; i < count; ++i)
+        for (UINT i = 0; i < count; ++i) {
+            if (modes != nullptr && (params[i].Dest % 4) != 0) return check(false);
             check(list_.write_immediate({params[i].Dest, params[i].Value, modes ? u(modes[i]) : 0}));
+        }
     }
 
     // GCL1. Not allowed in a bundle, as no copy is.

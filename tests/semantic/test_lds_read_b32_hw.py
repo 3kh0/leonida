@@ -308,5 +308,38 @@ class TestConditionCodes(unittest.TestCase):
         self.assertEqual(state.scc, 0)
         self.assertEqual(state.vcc_lo, 0xFFFFFFFF)
 
+class TestIEEE754EdgeCases(unittest.TestCase):
+    def test_single_float_bit_patterns(self) -> None:
+        cases = {
+            "pos_zero": 0x00000000,
+            "neg_zero": 0x80000000,
+            "min_subnormal": 0x00000001,
+            "max_subnormal": 0x007FFFFF,
+            "min_normal": 0x00800000,
+            "one_f32": 0x3F800000,
+            "max_normal": 0x7F7FFFFF,
+            "pos_infinity": 0x7F800000,
+            "neg_infinity": 0xFF800000,
+            "quiet_nan": 0x7FC00000,
+            "signaling_nan": 0x7F800001,
+        }
+        state = ScalarState()
+        addr = 0x100
+        for name, bits in cases.items():
+            state.write_lds_u32(addr, bits)
+            state.vgprs[1] = addr
+            inst = DSReadB32Inst(RegSingle(RegType.VGPR, 2), RegSingle(RegType.VGPR, 1))
+            state.step(inst)
+            self.assertEqual(state.vgprs[2], bits, f"Failed for IEEE 754 f32 pattern {name}")
+            addr += 4
+
+    def test_f32_subnormals_bit_exact(self) -> None:
+        state = ScalarState()
+        state.write_lds_u32(0x20, 0x00000042)
+        state.vgprs[1] = 0x20
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 3), RegSingle(RegType.VGPR, 1))
+        state.step(inst)
+        self.assertEqual(state.vgprs[3], 0x00000042)
+
 if __name__ == "__main__":
     unittest.main()

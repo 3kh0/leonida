@@ -564,5 +564,38 @@ class TestFrexpMantF32ScalarInterpreter(unittest.TestCase):
         self.assertEqual(self.machine.vgprs[0], f32_to_bits(0.5))
 
 
+# ------------------------------------------------------------------------------
+# v_frexp_mant_f32 SIMD Divergence and EXEC Masking
+# ------------------------------------------------------------------------------
+
+class SIMDWaveFrexpMant:
+    def __init__(self, wave_size: int = 64):
+        self.wave_size = wave_size
+        self.vgprs: List[List[int]] = [[0] * wave_size for _ in range(256)]
+        self.exec_mask: int = (1 << wave_size) - 1
+
+    def step(self, insn: VFrexpMantF32Instruction):
+        for lane in range(self.wave_size):
+            if (self.exec_mask >> lane) & 1:
+                val = self.vgprs[insn.src0.index][lane]
+                self.vgprs[insn.dst.index][lane] = ref_frexp_mant_f32(val)
+
+
+class TestFrexpMantF32SIMDDivergence(unittest.TestCase):
+    def test_simd_execution(self):
+        wave = SIMDWaveFrexpMant(wave_size=32)
+        for lane in range(32):
+            sign = -1.0 if lane % 2 else 1.0
+            wave.vgprs[1][lane] = f32_to_bits(sign * 2.0)
+            wave.vgprs[0][lane] = 0
+
+        insn = VFrexpMantF32Instruction(dst=RegisterOperand(OperandType.VGPR, 0), src0=RegisterOperand(OperandType.VGPR, 1))
+        wave.step(insn)
+
+        for lane in range(32):
+            expected = f32_to_bits(-0.5 if lane % 2 else 0.5)
+            self.assertEqual(wave.vgprs[0][lane], expected)
+
+
 if __name__ == '__main__':
     unittest.main()

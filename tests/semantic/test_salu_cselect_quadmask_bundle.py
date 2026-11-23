@@ -336,6 +336,19 @@ class TestSQuadmaskB64Interpreter(unittest.TestCase):
         self.assertEqual((state.sgpr[0], state.sgpr[1]), (0x5555, 0))
         self.assertEqual(state.scc, 1)
 
+class TestSQuadmaskB64EdgeCases(unittest.TestCase):
+    def test_quadmask_high_word_only(self):
+        r_lo, r_hi, scc = ref_s_quadmask_b64(0, 0xF0000000)
+        self.assertEqual(r_lo, 0x8000)
+        self.assertEqual(r_hi, 0)
+        self.assertEqual(scc, 1)
+
+    def test_quadmask_low_word_only(self):
+        r_lo, r_hi, scc = ref_s_quadmask_b64(0x0000000F, 0)
+        self.assertEqual(r_lo, 0x0001)
+        self.assertEqual(r_hi, 0)
+        self.assertEqual(scc, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

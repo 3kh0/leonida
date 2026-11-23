@@ -173,6 +173,11 @@ def main(argv=None):
     if os.path.isdir(args.out):
         print(f"ERROR: --out is a folder, not a scene file: {args.out}", file=sys.stderr)
         return 2
+    folder = os.path.dirname(os.path.abspath(args.out))
+    if not os.path.isdir(folder):
+        # Refuse before the scan rather than after it, with the same one-line form.
+        print(f"ERROR: {folder} is not a folder, so {args.out} cannot be written", file=sys.stderr)
+        return 2
     try:
         stats = build(args)
     except OSError as e:

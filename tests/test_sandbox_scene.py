@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import struct
+import subprocess
 import tempfile
 import tracemalloc
 import unittest
@@ -11,6 +12,8 @@ from contextlib import redirect_stderr
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
 import sandbox_scene
+
+TOOL = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools', 'sandbox_scene.py')
 
 class TestSandboxScene(unittest.TestCase):
     def test_draw_rows(self):
@@ -172,6 +175,16 @@ class TestCliErrors(unittest.TestCase):
         with open(out, "rb") as f:
             self.assertEqual(f.read(4), b"LSB1")
 
+    def test_out_folder_missing_is_refused_before_the_scan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "missing", "scene.lsb")
+            run = subprocess.run([sys.executable, "-I", TOOL,
+                                  "--entities", os.path.join(tmp, "rows.jsonl"),
+                                  "--models", os.path.join(tmp, "models"),
+                                  "--out", out], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 2, run.stderr)
+        self.assertIn("is not a folder, so", run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
 
 if __name__ == "__main__":
     unittest.main()

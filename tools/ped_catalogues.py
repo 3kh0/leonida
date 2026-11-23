@@ -1498,7 +1498,7 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     names: list[str] = list(args.name or ())
     if args.names_file:
         try:
-            with open(args.names_file, encoding="utf-8") as fh:
+            with open(args.names_file, encoding="utf-8-sig") as fh:
                 for line in fh:
                     s = line.strip()
                     if s and not s.startswith("#"):

@@ -307,6 +307,18 @@ class TestVFmamkF32InlineMultiplier(unittest.TestCase):
                 words = run_bundle_ps(lines, f"ps_fmamk_k_{k:#x}")
                 self.assertEqual(words[0], expected)
 
+class TestVFmamkF32IEEEEdgeCases(unittest.TestCase):
+    """Stage 4 for v_fmamk_f32: IEEE boundary extremes with inline multiplier."""
+
+    def test_v_fmamk_f32_edge_cases(self):
+        lines = [
+            "v_mov_b32 v1, 0x40000000",
+            "v_mov_b32 v2, 0x00000000",
+            "v_fmamk_f32 v0, v1, 0x40400000, v2",  # 2.0 * 3.0 + 0.0 = 6.0 (0x40C00000)
+        ]
+        words = run_bundle_ps(lines, "ps_fmamk_zero")
+        self.assertEqual(words[0], 0x40C00000)
+
 
 if __name__ == '__main__':
     unittest.main()

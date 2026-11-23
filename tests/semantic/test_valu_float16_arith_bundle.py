@@ -420,6 +420,13 @@ class TestVMax3F16TranslatorAndControls(unittest.TestCase):
         with self.assertRaises(Exception):
             support.translate_lines("ps_neg_v_max3_f16", ["v_max3_f16", "s_endpgm"])
 
+class TestVMed3F16ReferenceOracle(unittest.TestCase):
+    """Stage 1 for v_med3_f16: reference mathematical oracle validation."""
+
+    def test_v_med3_f16_oracle_identity(self):
+        res = oracle_v_med3_f16(0x4200, 0x3c00, 0x4000)
+        self.assertEqual(res, 0x4000)
+
 
 if __name__ == '__main__':
     unittest.main()

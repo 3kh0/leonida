@@ -132,6 +132,45 @@ class TestSCSelectB64Reference(unittest.TestCase):
         r_lo, r_hi = ref_s_cselect_b64(0, 0x11112222, 0x33334444, 0x55556666, 0x77778888)
         self.assertEqual((r_lo, r_hi), (0x55556666, 0x77778888))
 
+@SaluInterpreterState.register("s_cselect_b64")
+def _step_cselect_b64(state: SaluInterpreterState, inst: SaluInstruction) -> tuple[int, int]:
+    s0_lo = state.sgpr[inst.s0]
+    s0_hi = state.sgpr[inst.s0 + 1]
+    s1_lo = state.sgpr[inst.s1]
+    s1_hi = state.sgpr[inst.s1 + 1]
+    r_lo, r_hi = ref_s_cselect_b64(state.scc, s0_lo, s0_hi, s1_lo, s1_hi)
+    state.sgpr[inst.dst] = r_lo
+    state.sgpr[inst.dst + 1] = r_hi
+    return r_lo, r_hi
+
+
+class TestSCSelectB64Interpreter(unittest.TestCase):
+    def test_interpreter_step_scc1(self):
+        state = SaluInterpreterState()
+        state.scc = 1
+        state.sgpr[2] = 0xAAAA0000
+        state.sgpr[3] = 0x0000BBBB
+        state.sgpr[4] = 0xCCCC0000
+        state.sgpr[5] = 0x0000DDDD
+        inst = SaluInstruction("s_cselect_b64", dst=0, s0=2, s1=4)
+        r_lo, r_hi = state.step(inst)
+        self.assertEqual((r_lo, r_hi), (0xAAAA0000, 0x0000BBBB))
+        self.assertEqual((state.sgpr[0], state.sgpr[1]), (0xAAAA0000, 0x0000BBBB))
+        self.assertEqual(state.scc, 1)
+
+    def test_interpreter_step_scc0(self):
+        state = SaluInterpreterState()
+        state.scc = 0
+        state.sgpr[2] = 0xAAAA0000
+        state.sgpr[3] = 0x0000BBBB
+        state.sgpr[4] = 0xCCCC0000
+        state.sgpr[5] = 0x0000DDDD
+        inst = SaluInstruction("s_cselect_b64", dst=0, s0=2, s1=4)
+        r_lo, r_hi = state.step(inst)
+        self.assertEqual((r_lo, r_hi), (0xCCCC0000, 0x0000DDDD))
+        self.assertEqual((state.sgpr[0], state.sgpr[1]), (0xCCCC0000, 0x0000DDDD))
+        self.assertEqual(state.scc, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

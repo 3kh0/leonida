@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import functools
 import http.server
+import io
 import os
 from pathlib import Path
 import socket
@@ -177,9 +178,82 @@ def raw_request(port, target, host="127.0.0.1", method="GET", extra_headers=()):
                 break
             chunks.append(data)
     raw = b"".join(chunks)
+    return split_response(raw)
+
+
+def split_response(raw):
     head, _, body = raw.partition(b"\r\n\r\n")
     status = int(head.split(b"\r\n", 1)[0].split()[1])
     return status, head.decode("latin-1"), body
+
+
+class MemoryConnection:
+    """Stands in for the accepted socket, so a handler reads exactly the bytes a test wrote: no loopback TCP, and so
+    nothing between the two ends that could rewrite the request (see loopback_keeps_a_repeated_host)."""
+
+    def __init__(self, request: bytes):
+        self._request = io.BytesIO(request)
+        self.response = bytearray()
+
+    def makefile(self, mode, bufsize=-1):
+        return self._request
+
+    def sendall(self, data):
+        self.response += data
+
+
+def memory_request(handler, target, host="127.0.0.1", method="GET", extra_headers=()):
+    """raw_request without a socket: `handler` (the server's handler factory) answers the same request bytes."""
+    lines = [f"{method} {target} HTTP/1.1"]
+    if host is not None:
+        lines.append(f"Host: {host}")
+    lines += list(extra_headers)
+    lines += ["Connection: close", "", ""]
+    connection = MemoryConnection("\r\n".join(lines).encode("latin-1"))
+    handler(connection, ("127.0.0.1", 0), None)
+    return split_response(bytes(connection.response))
+
+
+@functools.lru_cache(maxsize=1)
+def loopback_keeps_a_repeated_host() -> bool:
+    """False when a request sent over loopback TCP arrives without its second Host field.
+
+    Security software that filters HTTP does this on some machines, on 127.0.0.1 too (measured with ESET's protocol
+    filtering on Windows 11: `Host: a`, `Host: b` arrives as `Host: a`; a repeated field of another name arrives
+    whole). The server then never sees the request the test wrote, so a test of the duplicate-Host rule over a socket
+    measures the filter, not serve.py."""
+    request = b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nHost: evil.example\r\nConnection: close\r\n\r\n"
+    received = bytearray()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(10)
+
+        def accept():
+            try:
+                peer, _ = listener.accept()
+            except OSError:
+                return
+            with peer:
+                peer.settimeout(10)
+                try:
+                    while not received.endswith(b"\r\n\r\n"):
+                        data = peer.recv(65536)
+                        if not data:
+                            break
+                        received.extend(data)
+                except OSError:
+                    pass
+
+        thread = threading.Thread(target=accept, daemon=True)
+        thread.start()
+        try:
+            with socket.create_connection(listener.getsockname(), timeout=10) as sock:
+                sock.sendall(request)
+                thread.join(10)
+        except OSError:
+            return True          # no answer about a filter: let the socket test run and report what it sees
+    return bytes(received) == request or not received
 
 
 class HandlerTest(unittest.TestCase):
@@ -203,8 +277,9 @@ class HandlerTest(unittest.TestCase):
 
         QuietHandler.world = str(world)      # a class body cannot see the enclosing function's locals
 
-        cls.server = http.server.ThreadingHTTPServer(
-            ("127.0.0.1", 0), functools.partial(QuietHandler, directory=str(root / "site")))
+        # staticmethod: a partial kept on the class must not become a bound method when read through an instance.
+        cls.handler = staticmethod(functools.partial(QuietHandler, directory=str(root / "site")))
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), cls.handler)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -244,7 +319,7 @@ class HandlerTest(unittest.TestCase):
                 self.assertEqual(status, 403)
                 self.assertIn("cache-control: no-store", head.lower())
 
-    def test_duplicate_host_headers_get_400(self):
+    def check_duplicate_host_headers_get_400(self, request):
         # headers.get("Host") returned only the first field, so a loopback Host followed by a foreign one was served.
         loopback = f"127.0.0.1:{self.port}"
         cases = {
@@ -259,12 +334,33 @@ class HandlerTest(unittest.TestCase):
             for target in ("/world/ok.bin", "/index.html"):
                 for label, (host, extra) in cases.items():
                     with self.subTest(method=method, target=target, case=label):
-                        status, head, body = raw_request(self.port, target, host=host, method=method,
-                                                         extra_headers=extra)
+                        status, head, body = request(target, host=host, method=method, extra_headers=extra)
                         self.assertEqual(status, 400)
                         self.assertIn("cache-control: no-store", head.lower())
                         self.assertNotIn(b"world-bytes", body)
                         self.assertNotIn(b"<title>viewer</title>", body)
+
+    def test_duplicate_host_headers_get_400(self):
+        # The handler reads the request from memory, so the rule is checked on every machine.
+        self.check_duplicate_host_headers_get_400(functools.partial(memory_request, self.handler))
+
+    def test_duplicate_host_headers_get_400_over_a_socket(self):
+        if not loopback_keeps_a_repeated_host():
+            self.skipTest("something on this machine removes a repeated Host field from loopback HTTP requests "
+                          "(security software that filters HTTP; docs/testing.md, Known problems)")
+        self.check_duplicate_host_headers_get_400(functools.partial(raw_request, self.port))
+
+    def test_a_request_from_memory_is_answered_like_one_over_a_socket(self):
+        # memory_request must reach the same guards and files as raw_request, or the test above checks nothing.
+        loopback = f"127.0.0.1:{self.port}"
+        for target, host, method in (("/world/ok.bin", loopback, "GET"), ("/world/ok.bin", loopback, "HEAD"),
+                                     ("/index.html", loopback, "GET"), ("/world/ok.bin", "evil.example", "GET"),
+                                     ("/world/../secret.txt", loopback, "GET"), ("/world/ok.bin", None, "GET")):
+            with self.subTest(target=target, host=host, method=method):
+                over_socket = raw_request(self.port, target, host=host, method=method)
+                from_memory = memory_request(self.handler, target, host=host, method=method)
+                self.assertEqual(from_memory[0], over_socket[0])
+                self.assertEqual(from_memory[2], over_socket[2])
 
     def test_a_malformed_host_gets_403(self):
         for host in (f"127.0.0.1:{self.port}junk", "localhost:abc", f"[::1]evil.example:{self.port}",

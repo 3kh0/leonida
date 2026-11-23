@@ -298,5 +298,11 @@ class VFrexpMantF16AstTests(unittest.TestCase):
         self.assertEqual(ast.mnemonic, "v_frexp_mant_f16")
         self.assertEqual(ast.dst.index, 2)
 
+class VFrexpMantF16ScalarInterpreterTests(unittest.TestCase):
+    def test_frexp_mant_scalar_execution(self):
+        # 6.0: 6.0 = 0.75 * 2^3 -> mantissa is 0.75 (0x3a00)
+        res = oracle_frexp_mant_f16(f16_to_u16(6.0))
+        self.assertEqual(res, 0x3A00)
+
 if __name__ == "__main__":
     unittest.main()

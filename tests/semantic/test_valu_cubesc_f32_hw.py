@@ -499,5 +499,40 @@ class TestVCubescF32ConditionCodes(unittest.TestCase):
         self.assertEqual(flags.major_axis, "Z")
 
 
+class TestVCubescF32IEEE754(unittest.TestCase):
+    """IEEE 754 raw bit pattern preservation and subnormal/NaN behavior."""
+
+    def test_ieee754_signed_zeros(self):
+        # +0.0 and -0.0
+        p0 = f32_to_bits(0.0)
+        n0 = f32_to_bits(-0.0)
+        self.assertEqual(ref_cubesc_bits(p0, p0, p0), p0)
+        self.assertEqual(ref_cubesc_bits(n0, n0, n0), n0)
+
+    def test_ieee754_subnormals(self):
+        # Smallest positive subnormal: 0x00000001
+        sub_pos = 0x00000001
+        one = f32_to_bits(1.0)
+        # Major axis is Y (1.0), so sc = x = sub_pos
+        res = ref_cubesc_bits(sub_pos, one, 0)
+        self.assertEqual(res, sub_pos)
+
+    def test_ieee754_infinities(self):
+        inf = f32_to_bits(math.inf)
+        neginf = f32_to_bits(-math.inf)
+        one = f32_to_bits(1.0)
+        # Z is +inf (face 4), sc = x = 1.0
+        self.assertEqual(ref_cubesc_bits(one, 0, inf), one)
+        # Z is -inf (face 5), sc = -x = -1.0
+        self.assertEqual(ref_cubesc_bits(one, 0, neginf), f32_to_bits(-1.0))
+
+    def test_ieee754_hw_translator(self):
+        # Verify hardware translator handles +/-0.0 and inf cleanly
+        inf = f32_to_bits(math.inf)
+        one = f32_to_bits(1.0)
+        hw_res = run_hw_cubesc(one, 0, inf)
+        self.assertEqual(hw_res, one)
+
+
 if __name__ == "__main__":
     unittest.main()

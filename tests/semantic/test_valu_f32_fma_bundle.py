@@ -267,6 +267,14 @@ class TestVFmaakF32TranslatorAndControls(unittest.TestCase):
         with self.assertRaises(Exception):
             support.translate_lines("ps_neg_v_fmaak_f32", ["v_fmaak_f32", "s_endpgm"])
 
+class TestVFmamkF32ReferenceOracle(unittest.TestCase):
+    """Stage 1 for v_fmamk_f32: reference mathematical oracle validation."""
+
+    def test_v_fmamk_f32_oracle_identity(self):
+        # 2.0 * 3.0 + 1.0 = 7.0
+        res = oracle_fma_f32(0x40000000, 0x40400000, 0x3F800000)
+        self.assertEqual(res, 0x40E00000)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -672,18 +672,6 @@ Two things are still open:
 Until both are settled, a real model is drawn with a chosen pair ([first_light.md](first_light.md)). The effect
 records already give that choice a pair that can be checked independently.
 
-So a material leads to its effect. Through the carved compute names it reaches only 8 of the 18 hashes; the
-effect records' own names reach all 18 (@jeremygold02, `tools/sgd5_effects.py` in #3036). The draw (VS/PS/MS)
-programs are not reachable through the carved programs' names, order or suffixes:
-
-- None of the 23,619 graphics programs (2,236 VS, 12,101 PS, 9,282 MS; the 195 GS are left out here) carries an
-  effect name; they are named `<stage>_<technique or entry>_<8 hex>`.
-- `shaders.rpf` stores programs grouped by kind, not by effect (the 1,004 `RaytracingResolve` programs sit next
-  to each other), so position doesn't group an effect's programs either.
-- Every one of the 23,619 has an 8-hex suffix. The suffixes group them: there are 1,228 distinct ones, the largest
-  shared by 1,806 programs and 53 used once. The suffix is not the joaat of the program name, and only 1 of the
-  896 suffixes on the effect-named CS programs appears on any graphics program.
-
 They are reachable through the **effect records** in `shaders.rpf` (found by @jeremygold02, #2519). All fields
 are little-endian:
 

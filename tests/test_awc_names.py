@@ -170,6 +170,18 @@ class TestRules(unittest.TestCase):
         self.assertEqual(stats["family_min_size"], 2)
         self.assertEqual(stats["control_dialogue"] + stats["control_family"], 0)
 
+    def test_colliding_dialogue_words_leave_shared_id_unnamed(self):
+        first, second = "synthetic38378au_abcd_01", "synthetic42901au_abcd_01"
+        self.assertEqual(A.joaat(first) & A.M29, A.joaat(second) & A.M29)
+        base = first[:-3]
+        siblings = [base + "_02", base + "_03"]
+        unique = "uniqueau_abcd_01"
+        d = A.Dictionary([first, second, unique, *siblings])
+        index = self.index({"music": [first, second, unique, *siblings], "other": [first]})
+        found, _ = A.name_source(d, [base], index)
+        self.assertEqual({key: value[0] for key, value in found.items()},
+                         {(0, A.joaat(w) & A.M29): w for w in [unique, *siblings]})
+
     def test_rejected_dialogue_hit_does_not_shadow_accepted_family_member(self):
         d = A.Dictionary(["zz_fooau_abcd_01"])
         bases = ["zz_fooau_abcd"]

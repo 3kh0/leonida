@@ -10,6 +10,7 @@ name is accepted under one of two rules:
               numbers. The base must be made of common tokens (each in at least ``--min-token`` dictionary words), and
               at least one member must be a dictionary word itself.
 
+An id shared by two exact dialogue words is left unnamed. The bank has no spelling to distinguish them.
 Every run repeats the attack with a salt prepended to each word (``zq``): those names cannot be right, so their
 accepted count estimates the false names. Per source, the dialogue rule is kept only if its control is under 2% of
 its real count, and the family rule uses the smallest family size whose control is under 2%.
@@ -228,12 +229,19 @@ def family_ok(names) -> bool:
 def _attack_split(dictionary: Dictionary, bases: list, index: Index, salt: str) -> tuple:
     """Separate dialogue and best family hits per (bank number, id) before control filtering."""
     dialogue_hits = {}
+    ambiguous_ids = set()
     for w in dictionary.words:
         if DIALOGUE.match(w):
             name = salt + w
             h = joaat(name) & M29
             for b in index.by_id.get(h, ()):
-                dialogue_hits[(b, h)] = (name, "dialogue", 99)
+                if (b, h) in dialogue_hits:
+                    ambiguous_ids.add(h)
+                else:
+                    dialogue_hits[(b, h)] = (name, "dialogue", 99)
+    for h in ambiguous_ids:
+        for b in index.by_id[h]:
+            del dialogue_hits[(b, h)]
     suffix_bytes = [_enc(s) for s in SUFFIXES]
     families = collections.defaultdict(dict)     # (bank, base) -> {id: (name, verbatim)}
     by_id = index.by_id
@@ -242,7 +250,7 @@ def _attack_split(dictionary: Dictionary, bases: list, index: Index, salt: str) 
         for s, sb in zip(SUFFIXES, suffix_bytes):
             i = joaat_finish(joaat_state(sb, state)) & M29
             banks = by_id.get(i)
-            if banks:
+            if banks and i not in ambiguous_ids:
                 verbatim = (base + s) in dictionary.wordset
                 for b in banks:
                     families[(b, base)][i] = (salt + base + s, verbatim)

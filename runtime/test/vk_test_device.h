@@ -109,6 +109,10 @@ public:
     // create(true) only: VK_KHR (else EXT) swapchain_maintenance1 and its feature enabled, with the surface half on the
     // instance, so a vsync swapchain can switch to IMMEDIATE or FIFO_RELAXED per present.
     bool swapchain_maintenance1 = false;
+    bool multi_draw_indirect = false;  // multiDrawIndirect enabled, where the device has it
+    bool draw_indirect_count = false;  // drawIndirectCount (Vulkan 1.2) enabled, where the device has it
+    std::uint32_t max_draw_indirect_count = 0;  // VkPhysicalDeviceLimits::maxDrawIndirectCount
+    bool draw_indirect_first_instance = false;  // drawIndirectFirstInstance enabled: indirect records may start at an instance
     bool shader_fma = false;       // VK_KHR_shader_fma and shaderFmaFloat32 enabled (OpFmaKHR, rdna2spirv.py --fma khr)
     bool occlusion_query_precise = false;    // occlusionQueryPrecise enabled
     bool pipeline_statistics_query = false;  // pipelineStatisticsQuery enabled
@@ -116,6 +120,8 @@ public:
     bool request_buffer_device_address = false;  // set before create(): enable bufferDeviceAddress where supported
     bool buffer_device_address = false;  // enabled: buffer() memory and buffers can be addressed (device_address())
     bool conservative_rasterization = false; // VK_EXT_conservative_rasterization enabled where available
+    bool request_mesh_shader = false;  // set before create(): enable VK_EXT_mesh_shader (meshShader) where available
+    bool mesh_shader = false;          // VK_EXT_mesh_shader and meshShader are enabled
     bool debug_utils = false;          // VK_EXT_debug_utils is enabled on the instance
     // The subgroup sizes of the device, with subgroupSizeControl and computeFullSubgroups enabled where it has them.
     leonida::SubgroupSizeCaps subgroup;
@@ -374,6 +380,8 @@ public:
         VkPhysicalDeviceVulkan12Features enable12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &enable11};
         enable12.timelineSemaphore = VK_TRUE;
         enable12.separateDepthStencilLayouts = VK_TRUE;
+        enable12.drawIndirectCount = features12.drawIndirectCount;  // ExecuteIndirect with a count buffer
+        draw_indirect_count = features12.drawIndirectCount == VK_TRUE;
         buffer_device_address = request_buffer_device_address && features12.bufferDeviceAddress == VK_TRUE;
         enable12.bufferDeviceAddress = buffer_device_address;
         storage_buffer_8bit = features12.storageBuffer8BitAccess == VK_TRUE;
@@ -428,6 +436,11 @@ public:
         bc = features.features.textureCompressionBC == VK_TRUE;
         enable.shaderSampledImageArrayDynamicIndexing = bindless;
         enable.shaderStorageImageArrayDynamicIndexing = bindless;
+        enable.multiDrawIndirect = features.features.multiDrawIndirect;  // ExecuteIndirect: several commands per call
+        multi_draw_indirect = features.features.multiDrawIndirect == VK_TRUE;
+        enable.drawIndirectFirstInstance = features.features.drawIndirectFirstInstance;
+        draw_indirect_first_instance = features.features.drawIndirectFirstInstance == VK_TRUE;
+        max_draw_indirect_count = chosen.limits.maxDrawIndirectCount;
         enable.logicOp = features.features.logicOp;  // d3d12_draw_test's logic-op draw, where available
         enable.geometryShader = features.features.geometryShader;  // d3d12_geometry_test, where available
         enable.shaderInt64 = features.features.shaderInt64;  // translated shaders declare Int64 for their addresses
@@ -511,6 +524,20 @@ public:
             }
         }
 #endif
+        // VK_EXT_mesh_shader (meshShader only), for the tests that ask for it.
+        VkPhysicalDeviceMeshShaderFeaturesEXT mesh_features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+        if (request_mesh_shader && std::any_of(extensions.begin(), extensions.end(), [](const auto& e) {
+                return std::strcmp(e.extensionName, VK_EXT_MESH_SHADER_EXTENSION_NAME) == 0;
+            })) {
+            VkPhysicalDeviceFeatures2 query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &mesh_features};
+            instance_fn<PFN_vkGetPhysicalDeviceFeatures2>("vkGetPhysicalDeviceFeatures2")(physical, &query);
+            mesh_shader = mesh_features.meshShader == VK_TRUE;
+        }
+        if (mesh_shader) {
+            mesh_features = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT, *v13_.next()};
+            mesh_features.meshShader = VK_TRUE;
+            *v13_.next() = &mesh_features;
+        }
         enable.occlusionQueryPrecise = features.features.occlusionQueryPrecise;  // query heaps, where available
         enable.pipelineStatisticsQuery = features.features.pipelineStatisticsQuery;
         occlusion_query_precise = features.features.occlusionQueryPrecise == VK_TRUE;
@@ -576,6 +603,7 @@ public:
         if (shader_fma) device_extensions.push_back(VK_KHR_SHADER_FMA_EXTENSION_NAME);
 #endif
         if (custom_border_color) device_extensions.push_back(custom_border_color_name);
+        if (mesh_shader) device_extensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
         device_info.enabledExtensionCount = std::uint32_t(device_extensions.size());
         device_info.ppEnabledExtensionNames = device_extensions.data();
         result = instance_fn<PFN_vkCreateDevice>("vkCreateDevice")(physical, &device_info, nullptr, &device);

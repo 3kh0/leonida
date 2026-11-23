@@ -90,6 +90,7 @@ const char* name(leonida::ReplayResult result) {
     case leonida::ReplayResult::invalid_copy: return "invalid copy or resolve";
     case leonida::ReplayResult::invalid_query: return "invalid query";
     case leonida::ReplayResult::invalid_indirect_arguments: return "invalid indirect argument or count buffer range";
+    case leonida::ReplayResult::invalid_draw: return "draw kind does not match the pipeline (mesh or vertex)";
     case leonida::ReplayResult::unsupported: return "unsupported";
     }
     return "?";
@@ -433,6 +434,17 @@ public:
         record_draw(true, indices, instances, first_index, base_vertex, first_instance);
     }
 
+    // ID3D12GraphicsCommandList6: a mesh draw. The bound graphics pipeline must have a mesh shader (checked at
+    // execution, where the pipeline is resolved). D3D12 caps each count at 65535 and their product at 2^22
+    // (D3D12_MS_DISPATCH_MAX_THREAD_GROUPS_PER_GRID); a larger grid is a recording error.
+    void STDMETHODCALLTYPE DispatchMesh(UINT x, UINT y, UINT z) override {
+        d3d12_trace::record("ID3D12GraphicsCommandList6::DispatchMesh");
+        if (x > 65535 || y > 65535 || z > 65535 || std::uint64_t(x) * y * z > (1u << 22)) return check(false);
+        if (!graphics_pipeline_ || !graphics_.layout) return check(false);
+        if (!(viewport_.width > 0) || !(viewport_.height > 0)) return;  // as record_draw: nothing is rasterized
+        check(list_.draw(make_mesh_draw(x, y, z)));
+    }
+
     void STDMETHODCALLTYPE ResourceBarrier(UINT count, const D3D12_RESOURCE_BARRIER* barriers) override {
         d3d12_trace::record("ID3D12GraphicsCommandList::ResourceBarrier");
         if (type_ == D3D12_COMMAND_LIST_TYPE_BUNDLE) return check(false);
@@ -750,6 +762,17 @@ public:
         if (!command_signature_info(signature, kind, stride) || !argument_buffer)
             return check(false);
         leonida::ExecuteIndirect cmd{};
+        // A draw takes the list's graphics state, as DrawInstanced does; with nothing to rasterize it is dropped. A
+        // list with no pipeline, root signature or topology yet records the bare call (it closes, as on the PC
+        // runtime; it is not a call replay can run).
+        // A DISPATCH_MESH signature takes the state DispatchMesh does: no topology, vertex or index buffers.
+        const bool mesh = kind == leonida::IndirectKind::dispatch_mesh;
+        if (kind != leonida::IndirectKind::dispatch && max_command_count && graphics_pipeline_ && graphics_.layout &&
+            (topology_ || mesh)) {
+            if (!(viewport_.width > 0) || !(viewport_.height > 0)) return;
+            cmd.state = std::make_shared<const leonida::Draw>(
+                mesh ? make_mesh_draw(0, 0, 0) : make_draw(kind == leonida::IndirectKind::draw_indexed, 0, 0, 0, 0, 0));
+        }
         cmd.kind = kind;
         cmd.stride = stride;
         cmd.max_count = max_command_count;
@@ -1185,10 +1208,24 @@ private:
         // No viewport (never set, or unbound with RSSetViewports(0)) or an empty one: D3D12 rasterizes nothing,
         // and Vulkan forbids a 0x0 viewport, so the draw is not recorded.
         if (!(viewport_.width > 0) || !(viewport_.height > 0)) return;
-        leonida::Draw draw{graphics_pipeline_, graphics_.data, draw_views(), depth_, index_, topology_, viewport_,
-                           scissor_, blend_factor_, front_stencil_ref_, back_stencil_ref_, indexed, count, instances,
-                           first, base_vertex, first_instance};
-        check(list_.draw(std::move(draw)));
+        check(list_.draw(make_draw(indexed, count, instances, first, base_vertex, first_instance)));
+    }
+
+    // The list's graphics state as a mesh draw: no vertex input or input assembly; the group counts go in
+    // count/instances/first.
+    leonida::Draw make_mesh_draw(UINT x, UINT y, UINT z) {
+        leonida::Draw draw{graphics_pipeline_, graphics_.data, draw_views(), depth_, {}, 0, viewport_,
+                           scissor_, blend_factor_, front_stencil_ref_, back_stencil_ref_, false, x, y, z, 0, 0};
+        draw.mesh = true;
+        return draw;
+    }
+
+    // The list's graphics state as a draw (see record_draw for what has to be set).
+    leonida::Draw make_draw(bool indexed, UINT count, UINT instances, UINT first, INT base_vertex,
+                            UINT first_instance) {
+        return {graphics_pipeline_, graphics_.data, draw_views(), depth_, index_, topology_, viewport_, scissor_,
+                blend_factor_, front_stencil_ref_, back_stencil_ref_, indexed, count, instances, first,
+                base_vertex, first_instance};
     }
 };
 

@@ -95,17 +95,19 @@ struct VulkanDeviceFunctions {
     X(vkCmdSetPrimitiveTopology) X(vkCmdSetPrimitiveRestartEnable) X(vkCmdSetStencilReference)                          \
     X(vkCmdSetBlendConstants) X(vkCmdDraw)                                                                              \
     X(vkCmdDrawIndexed) X(vkCreateGraphicsPipelines) X(vkQueueBindSparse) X(vkGetImageSparseMemoryRequirements)   \
-    X(vkCreatePipelineCache) X(vkDestroyPipelineCache)                                                        \
-    X(vkCreateEvent) X(vkDestroyEvent) X(vkResetEvent) X(vkCmdSetEvent) X(vkCmdWaitEvents)                     \
+    X(vkCreatePipelineCache) X(vkDestroyPipelineCache) X(vkGetPipelineCacheData)                              \
+    X(vkCreateEvent) X(vkDestroyEvent) X(vkResetEvent) X(vkCmdSetEvent) X(vkCmdWaitEvents) X(vkCmdDrawMeshTasksEXT)  \
+    X(vkCmdDrawMeshTasksIndirectEXT) X(vkCmdDrawMeshTasksIndirectCountEXT)                                  \
     X(vkCreateRenderPass2) X(vkDestroyRenderPass) X(vkCreateFramebuffer) X(vkDestroyFramebuffer)               \
     X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass)
 #define LEONIDA_VK_MEMBER(name) PFN_##name name = nullptr;
     LEONIDA_VK_DEVICE_FUNCTIONS(LEONIDA_VK_MEMBER)
 #undef LEONIDA_VK_MEMBER
 
-    // The Vulkan 1.3 entry points may be null on older devices, the extension ones (conditional rendering) when the
-    // extension is not enabled, and the query functions are optional (a list that uses queries without them is
-    // unsupported). The compute and descriptor functions are needed for normalized or summed occlusion results.
+    // The Vulkan 1.3 entry points may be null on older devices, the extension ones (conditional rendering, mesh
+    // shaders) when the extension is not enabled, and the query functions are optional (a list that uses queries
+    // without them is unsupported). The compute and descriptor functions are needed for normalized or summed
+    // occlusion results.
     bool load(PFN_vkGetDeviceProcAddr get, VkDevice device) {
 #define LEONIDA_VK_LOAD(name) name = reinterpret_cast<PFN_##name>(leonida::device_proc_or_khr(get, device, #name));
         LEONIDA_VK_DEVICE_FUNCTIONS(LEONIDA_VK_LOAD)
@@ -956,6 +958,9 @@ public:
         replay_.set_stencil_reference = vk.vkCmdSetStencilReference;
         replay_.set_blend_constants = vk.vkCmdSetBlendConstants;
         replay_.draw = vk.vkCmdDraw;
+        replay_.draw_mesh_tasks = vk.vkCmdDrawMeshTasksEXT;  // null unless VK_EXT_mesh_shader is enabled
+        replay_.draw_mesh_tasks_indirect = vk.vkCmdDrawMeshTasksIndirectEXT;
+        replay_.draw_mesh_tasks_indirect_count = vk.vkCmdDrawMeshTasksIndirectCountEXT;
         replay_.draw_indexed = vk.vkCmdDrawIndexed;
         replay_.graphics_pipeline = [this](std::uintptr_t id) -> const GraphicsPipeline* {
             const auto it = graphics_pipelines_.find(id);
@@ -1223,6 +1228,16 @@ public:
 
     // The device address of the GPU address arena: console VAs are offsets from it (docs section 3.3).
     // execute() copies replay_ under a shared resource_mutex_, so writers hold it uniquely.
+    // The indirect-draw features enabled on the device (VulkanDeviceInfo::multi_draw_indirect / draw_indirect_count).
+    void set_indirect_features(bool multi_draw, bool draw_count, std::uint32_t max_draw_count = UINT32_MAX) {
+        replay_.multi_draw_indirect = multi_draw;
+        replay_.max_draw_indirect_count = max_draw_count;
+        if (!draw_count) {
+            replay_.draw_indirect_count = replay_.draw_indexed_indirect_count = nullptr;
+            replay_.draw_mesh_tasks_indirect_count = nullptr;
+        }
+    }
+
     void set_heap_base(std::uint64_t heap_base) {
         std::unique_lock lock(resource_mutex_);
         replay_.heap_base = heap_base;

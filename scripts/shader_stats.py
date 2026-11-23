@@ -16,6 +16,10 @@ as 0; a summary clause over fewer shaders than the stage has says so with (n of 
 with are those of the same shaders. With only one of the two spill statistics reported, spills shows it when positive,
 with >= to mark a lower bound, and - when it is 0. When a driver omits a comparison metric, --details also lists any additional driver counters under that
 shader with their original names and values. A note lists those names in summary mode.
+
+Each (shader, stage, statistic) must occur at most once in the CSV. Multiple pipeline executables can report
+statistics with the same name, but this CSV does not identify the executables. Duplicate rows are refused
+instead of arbitrarily using the last value or combining incomparable measurements.
 """
 import csv
 import math
@@ -72,7 +76,12 @@ def load_stats(path):
             absent = [c for c in REQUIRED if row[c] is None]
             if absent:
                 raise ValueError(f"line {line}: row missing required column(s): {', '.join(absent)}")
-            out[row["name"], row["stage"]][row["statistic"]] = row["value"]
+            name, stage, statistic = row["name"], row["stage"], row["statistic"]
+            counters = out[name, stage]
+            if statistic in counters:
+                raise ValueError(f"line {line}: duplicate statistic {statistic!r} for shader {name!r} "
+                                 f"(stage {stage!r}); CSV does not identify pipeline executables")
+            counters[statistic] = row["value"]
     return out
 
 

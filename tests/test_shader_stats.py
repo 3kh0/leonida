@@ -181,6 +181,35 @@ class ShaderStats(unittest.TestCase):
         self.assertIn("stats.csv: line 2:", r.stderr)
         self.assertIn("row missing required column(s): value", r.stderr)
 
+    def test_duplicate_statistic_is_rejected_regardless_of_row_order(self):
+        for first, second in ((16, 32), (32, 16), (16, 16)):
+            for details in (False, True):
+                with self.subTest(first=first, second=second, details=details):
+                    r = self.run_stats([f"ps_flat,ps,Instructions,{first}",
+                                        "ps_flat,ps,VGPRs,8",
+                                        f"ps_flat,ps,Instructions,{second}"], details=details)
+                    self.assertEqual(r.returncode, 1, r.stdout)
+                    self.assertEqual(r.stdout, "")
+                    self.assertIn("stats.csv: line 4:", r.stderr)
+                    self.assertIn("duplicate statistic 'Instructions'", r.stderr)
+                    self.assertIn("ps_flat", r.stderr)
+                    self.assertNotIn("Traceback", r.stderr)
+
+    def test_duplicate_unrecognised_statistic_is_also_rejected(self):
+        r = self.run_stats(['ps_flat,ps,"Driver counter, raw",3',
+                            'ps_flat,ps,"Driver counter, raw",7'])
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout, "")
+        self.assertIn("duplicate statistic 'Driver counter, raw'", r.stderr)
+
+    def test_same_statistic_for_distinct_shaders_or_stages_is_valid(self):
+        r = self.run_stats(["ps_flat,ps,Instructions,16", "ps_other,ps,Instructions,24",
+                            "ps_flat,vs,Instructions,32"],
+                           details=False, listings={"ps_flat": PS_FLAT, "ps_other": PS_FLAT})
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertIn("ps: 2 shaders, code growth median 2.50x", r.stdout)
+        self.assertIn("vs: 1 shaders, code growth median 4.00x", r.stdout)
+
     def test_extra_headed_columns_and_explicitly_blank_value_remain_accepted(self):
         r = self.run_stats(["ps_flat,ps,Instructions,,abc", "ps_flat,ps,VGPRs,8,xyz"],
                            header="name,stage,statistic,value,extra")

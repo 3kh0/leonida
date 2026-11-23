@@ -381,6 +381,54 @@ class TestRegisterAliasing(unittest.TestCase):
         ])
         self.assertEqual(words[0], 0x12345678)
 
+@dataclass
+class IntegerStatusFlags:
+    zero: bool = False
+    negative: bool = False
+
+
+def classify_integer_status(val: int) -> IntegerStatusFlags:
+    val &= MASK32
+    return IntegerStatusFlags(
+        zero=(val == 0),
+        negative=bool(val & 0x80000000),
+    )
+
+
+class TestConditionCodesAndStatus(unittest.TestCase):
+    def test_vcc_and_scc_preservation(self):
+        # v_or3_b32 is a VALU bitwise op and does not write VCC or SCC
+        interp = ScalarInterpreter()
+        interp.state.scc = 1
+        interp.state.vcc = 0x123456789ABCDEF0
+        interp.state.vgprs[0] = 1
+        interp.state.vgprs[1] = 2
+        interp.state.vgprs[2] = 4
+
+        insn = VOr3B32Instruction(
+            dst=Operand.vgpr(3),
+            src0=Operand.vgpr(0),
+            src1=Operand.vgpr(1),
+            src2=Operand.vgpr(2),
+        )
+        interp.step(insn)
+
+        self.assertEqual(interp.state.scc, 1)
+        self.assertEqual(interp.state.vcc, 0x123456789ABCDEF0)
+
+    def test_status_flag_classification(self):
+        s_zero = classify_integer_status(0)
+        self.assertTrue(s_zero.zero)
+        self.assertFalse(s_zero.negative)
+
+        s_neg = classify_integer_status(0x80000000)
+        self.assertFalse(s_neg.zero)
+        self.assertTrue(s_neg.negative)
+
+        s_pos = classify_integer_status(0x7FFFFFFF)
+        self.assertFalse(s_pos.zero)
+        self.assertFalse(s_pos.negative)
+
 
 if __name__ == "__main__":
     unittest.main()

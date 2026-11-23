@@ -313,5 +313,77 @@ class TestSubF16AST(unittest.TestCase):
             LiteralOperand(0x1_0000_0000)
 
 
+# ==============================================================================
+# Deterministic Scalar Instruction Interpreter
+# ==============================================================================
+
+class ScalarMachine:
+    def __init__(self):
+        self.vgprs: List[int] = [0] * 256
+        self.sgprs: List[int] = [0] * 106
+        self.exec_lo: int = 0xFFFF_FFFF
+        self.exec_hi: int = 0xFFFF_FFFF
+        self.scc: int = 0
+
+    def read_operand(self, op: Union[RegisterOperand, LiteralOperand]) -> int:
+        if isinstance(op, LiteralOperand):
+            return op.value & MASK32
+        elif op.op_type == OperandType.VGPR:
+            return self.vgprs[op.index] & MASK32
+        elif op.op_type == OperandType.SGPR:
+            return self.sgprs[op.index] & MASK32
+        raise TypeError(f"Unknown operand type: {type(op)}")
+
+    def write_vgpr(self, index: int, val32: int):
+        self.vgprs[index] = val32 & MASK32
+
+    def step(self, insn: VSubF16Instruction):
+        val_s0 = self.read_operand(insn.src0)
+        val_s1 = self.read_operand(insn.src1)
+        old_dst = self.vgprs[insn.dst.index]
+        result = ref_v_sub_f16(
+            val_s0,
+            val_s1,
+            clamp=insn.modifiers.clamp,
+            abs_s0=insn.modifiers.abs_s0,
+            abs_s1=insn.modifiers.abs_s1,
+            neg_s0=insn.modifiers.neg_s0,
+            neg_s1=insn.modifiers.neg_s1,
+            old_dst=old_dst,
+        )
+        self.write_vgpr(insn.dst.index, result)
+
+
+class TestSubF16ScalarInterpreter(unittest.TestCase):
+    def setUp(self):
+        self.machine = ScalarMachine()
+
+    def test_scalar_execution_basic(self):
+        self.machine.vgprs[0] = 0x5A5A_0000
+        self.machine.vgprs[1] = THREE
+        self.machine.vgprs[2] = ONE
+        insn = VSubF16Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 1),
+            src1=RegisterOperand(OperandType.VGPR, 2),
+        )
+        self.machine.step(insn)
+        self.assertEqual(self.machine.vgprs[0] >> 16, 0x5A5A)
+        self.assertEqual(self.machine.vgprs[0] & 0xFFFF, TWO)
+
+    def test_scalar_with_sgpr_and_literal(self):
+        self.machine.vgprs[5] = 0xBEEF_0000
+        self.machine.sgprs[4] = ONE
+        lit = LiteralOperand(TWO)
+        insn = VSubF16Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 5),
+            src0=RegisterOperand(OperandType.SGPR, 4),
+            src1=lit,
+        )
+        self.machine.step(insn)
+        self.assertEqual(self.machine.vgprs[5] >> 16, 0xBEEF)
+        self.assertEqual(self.machine.vgprs[5] & 0xFFFF, NEG_ONE)
+
+
 if __name__ == '__main__':
     unittest.main()

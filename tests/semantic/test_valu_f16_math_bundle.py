@@ -378,5 +378,20 @@ class VLdexpF16ScalarInterpreterTests(unittest.TestCase):
         res = oracle_ldexp_f16(f16_to_u16(1.5), 1)
         self.assertEqual(res, f16_to_u16(3.0))
 
+class VLdexpF16SimdDivergenceTests(unittest.TestCase):
+    def test_ldexp_simd_exec_masking(self):
+        wave = WavefrontSimdState(lane_count=32)
+        wave.exec_mask = 0x00FF00FF
+        for i in range(32):
+            wave.set_vgpr(i, 0xAAAA)
+            if (wave.exec_mask >> i) & 1:
+                wave.set_vgpr(i, oracle_ldexp_f16(F16_POS_ONE, i % 8))
+        for i in range(32):
+            if (0x00FF00FF >> i) & 1:
+                expected = f16_to_u16(float(2**(i % 8)))
+                self.assertEqual(wave.get_vgpr(i), expected)
+            else:
+                self.assertEqual(wave.get_vgpr(i), 0xAAAA)
+
 if __name__ == "__main__":
     unittest.main()

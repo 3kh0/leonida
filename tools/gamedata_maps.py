@@ -319,7 +319,7 @@ def _join(row: dict, data: bytes) -> dict:
 
 
 def _read_index_rows(directory: str) -> list[dict]:
-    with open(os.path.join(directory, "index.json"), encoding="utf-8") as f:
+    with open(os.path.join(directory, "index.json"), encoding="utf-8-sig") as f:
         index = json.load(f)
     return sorted(index["files"], key=lambda r: r["off"])
 

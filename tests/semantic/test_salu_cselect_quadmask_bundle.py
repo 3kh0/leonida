@@ -349,6 +349,24 @@ class TestSQuadmaskB64EdgeCases(unittest.TestCase):
         self.assertEqual(r_hi, 0)
         self.assertEqual(scc, 1)
 
+class TestSQuadmaskB64Translator(unittest.TestCase):
+    def test_translate_s_quadmask_b64(self):
+        lines = [
+            "s_mov_b32 s2, 0x01020408",
+            "s_mov_b32 s3, 0x01020408",
+            "s_quadmask_b64 s[0:1], s[2:3]",
+            "s_cselect_b32 s2, 1, 0",
+            "v_mov_b32 v0, s0",
+            "v_mov_b32 v1, s1",
+            "v_mov_b32 v2, s2",
+            "exp mrt0 v0, v1, v2, v0 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_qm64", lines)
+        self.assertIn("OpEntryPoint", spv)
+        words = mrt0_words(spv)
+        self.assertEqual(words, [0x5555, 0, 1, 0x5555])
+
 
 if __name__ == "__main__":
     unittest.main()

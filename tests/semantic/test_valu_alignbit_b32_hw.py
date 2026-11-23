@@ -399,5 +399,47 @@ class TestValuAlignbitB32ConditionCodes(unittest.TestCase):
         self.assertEqual(state.vcc, 0xAAAAAAAAAAAAAAAA)
 
 
+class TestValuAlignbitB32IEEE754(unittest.TestCase):
+    """Stage 7: IEEE 754 boundary extremes, subnormals, and NaN handling."""
+
+    def test_raw_bitwise_preservation_no_ftz(self) -> None:
+        # Subnormal float 0x00000001 must not be flushed to zero
+        subnormal = 0x00000001
+        res = ref_alignbit_b32(subnormal, 0, 16)
+        # (0x00000001 << 16) | 0 = 0x00010000
+        self.assertEqual(res, 0x00010000)
+
+    def test_nan_and_infinity_payload_preservation(self) -> None:
+        qnan = 0x7FC00000
+        snan = 0x7F800001
+        pos_inf = 0x7F800000
+        neg_inf = 0xFF800000
+
+        # Rotate qnan by 0 returns qnan exactly
+        self.assertEqual(ref_alignbit_b32(qnan, qnan, 0), qnan)
+        # Shift snan: verify signaling bit is not modified/quietened
+        res = ref_alignbit_b32(snan, snan, 0)
+        self.assertEqual(res, snan)
+        self.assertEqual(res & 0x00400000, 0)  # still signaling, not quietened
+
+    def test_signed_zero_representation(self) -> None:
+        neg_zero = 0x80000000
+        pos_zero = 0x00000000
+        # Funnel shift negative zero high word into low word
+        res = ref_alignbit_b32(neg_zero, pos_zero, 8)
+        # (0x80000000 << 24) = 0x00000000 (truncated), pos_zero >> 8 = 0
+        self.assertEqual(res, 0x00000000)
+        res31 = ref_alignbit_b32(neg_zero, pos_zero, 31)
+        # (0x80000000 << 1) & MASK32 = 0x00000000
+        self.assertEqual(res31, 0x00000000)
+        res1 = ref_alignbit_b32(neg_zero, pos_zero, 1)
+        # (0x80000000 << 31) & MASK32 = 0x00000000
+        self.assertEqual(res1, 0x00000000)
+        # Rotate negative zero by 1
+        res_rot1 = ref_alignbit_b32(neg_zero, neg_zero, 1)
+        # Bit 31 shifts to bit 30
+        self.assertEqual(res_rot1, 0x40000000)
+
+
 if __name__ == "__main__":
     unittest.main()

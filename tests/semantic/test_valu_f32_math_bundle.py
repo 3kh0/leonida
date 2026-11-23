@@ -724,5 +724,45 @@ class TestLdexpF32AST(unittest.TestCase):
         self.assertEqual(insn.src1.name, "v2")
 
 
+# ------------------------------------------------------------------------------
+# v_ldexp_f32 Scalar Interpreter
+# ------------------------------------------------------------------------------
+
+class ScalarMachineLdexp:
+    def __init__(self):
+        self.vgprs: List[int] = [0] * 256
+        self.sgprs: List[int] = [0] * 106
+
+    def read_operand(self, op: Union[RegisterOperand, LiteralOperand]) -> int:
+        if isinstance(op, LiteralOperand):
+            return op.value & MASK32
+        elif op.op_type == OperandType.VGPR:
+            return self.vgprs[op.index] & MASK32
+        elif op.op_type == OperandType.SGPR:
+            return self.sgprs[op.index] & MASK32
+        raise TypeError(f"Unknown operand: {op}")
+
+    def step(self, insn: VLdexpF32Instruction):
+        s0 = self.read_operand(insn.src0)
+        s1 = self.read_operand(insn.src1)
+        self.vgprs[insn.dst.index] = ref_ldexp_f32(s0, s1)
+
+
+class TestLdexpF32ScalarInterpreter(unittest.TestCase):
+    def setUp(self):
+        self.machine = ScalarMachineLdexp()
+
+    def test_scalar_execution(self):
+        self.machine.vgprs[1] = f32_to_bits(1.0)
+        self.machine.vgprs[2] = 3
+        insn = VLdexpF32Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 1),
+            src1=RegisterOperand(OperandType.VGPR, 2),
+        )
+        self.machine.step(insn)
+        self.assertEqual(self.machine.vgprs[0], f32_to_bits(8.0))
+
+
 if __name__ == '__main__':
     unittest.main()

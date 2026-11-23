@@ -459,6 +459,116 @@ int main() {
         void* mapped2 = nullptr;
         EXPECT(SUCCEEDED(readback2->Map(0, nullptr, &mapped2)));
         std::memcpy(control_pixels.data(), mapped2, control_pixels.size());
+        readback->Unmap(0, nullptr);
+        readback2->Unmap(0, nullptr);
+
+        // BUILD-873. Both shaders sample the gradient three times without a sampler heap.
+        // Two literals are shared. Each PSO must register its third literal on its own.
+        {
+            const auto ps = read_file(root_dir / "fssm" / "ps_m2_literals.fssm");
+            const auto cs = read_file(root_dir / "fssm" / "cs_m2_literals.fssm");
+            EXPECT(!ps.empty() && !cs.empty());
+            const auto ps_blob = shader_container(ps), cs_blob = shader_container(cs);
+
+            D3D12_DESCRIPTOR_RANGE uav_range{D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0, 0, 0};
+            D3D12_ROOT_PARAMETER probe_params[2] = {params[0], params[0]};
+            probe_params[0].ShaderVisibility = probe_params[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+            probe_params[1].DescriptorTable.pDescriptorRanges = &uav_range;
+            auto probe_desc = root_desc;
+            probe_desc.Desc_1_0.pParameters = probe_params;
+            const auto blob = serialize_root_signature(probe_desc);
+            Ref<ID3D12RootSignature> probe_root;
+            EXPECT(SUCCEEDED(device->CreateRootSignature(0, blob.data(), blob.size(), IID_PPV_ARGS(&probe_root.p))));
+            auto gfx = pso_desc;
+            gfx.pRootSignature = probe_root.p;
+            gfx.PS = {ps_blob.data(), ps_blob.size()};
+            Ref<ID3D12PipelineState> draw, dispatch;
+            EXPECT(SUCCEEDED(device->CreateGraphicsPipelineState(&gfx, IID_PPV_ARGS(&draw.p))));
+            auto shared_indices = [&] {
+                std::array<std::uint32_t, 2> indices{};
+                std::uint32_t key[8] = {0x90, 0x500000, 0x500000, 0, ~0u, ~0u, ~0u, ~0u};
+                indices[0] = rt::d3d12::bindless_hash_lookup(device.p, key);  // wrap/linear
+                key[0] = 0x91;
+                key[2] = 0;
+                indices[1] = rt::d3d12::bindless_hash_lookup(device.p, key);  // mirror/point
+                return indices;
+            };
+            const auto graphics_indices = shared_indices();
+            D3D12_COMPUTE_PIPELINE_STATE_DESC compute{};
+            compute.pRootSignature = probe_root.p;
+            compute.CS = {cs_blob.data(), cs_blob.size()};
+            EXPECT(SUCCEEDED(device->CreateComputePipelineState(&compute, IID_PPV_ARGS(&dispatch.p))));
+
+            Ref<ID3D12Resource> output;
+            auto out_desc = buffer_desc(16);
+            out_desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+            EXPECT(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &out_desc,
+                         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&output.p))));
+            D3D12_UNORDERED_ACCESS_VIEW_DESC view{};
+            view.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            view.Buffer.NumElements = 1;
+            view.Buffer.StructureByteStride = 16;
+            device->CreateUnorderedAccessView(output.p, nullptr, &view, {SIZE_T(srv_cpu + 2 * step)});
+
+            EXPECT(SUCCEEDED(allocator2->Reset()));
+            EXPECT(SUCCEEDED(list2->Reset(allocator2.p, draw.p)));
+            list2->ResourceBarrier(1, &back);
+            list2->ClearRenderTargetView(rtv, clear, 0, nullptr);
+            list2->SetDescriptorHeaps(1, heaps);
+            list2->SetGraphicsRootSignature(probe_root.p);
+            list2->SetGraphicsRootDescriptorTable(0, {srv_gpu});
+            list2->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            list2->IASetIndexBuffer(&ibv);
+            list2->RSSetViewports(1, &viewport);
+            const D3D12_RECT full{0, 0, target_size, target_size};
+            list2->RSSetScissorRects(1, &full);
+            list2->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+            list2->DrawIndexedInstanced(6, 1, 0, 0, 0);
+            list2->ResourceBarrier(1, &to_copy);
+            list2->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+            auto to_compute = transition(textures[0].p, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            list2->ResourceBarrier(1, &to_compute);
+            list2->SetPipelineState(dispatch.p);
+            list2->SetComputeRootSignature(probe_root.p);
+            list2->SetComputeRootDescriptorTable(0, {srv_gpu});
+            list2->SetComputeRootDescriptorTable(1, {srv_gpu + 2 * step});
+            list2->Dispatch(1, 1, 1);
+            auto out_copy = transition(output.p, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            list2->ResourceBarrier(1, &out_copy);
+            list2->CopyBufferRegion(readback.p, 0, output.p, 0, 16);
+            EXPECT(SUCCEEDED(list2->Close()));
+            queue->ExecuteCommandLists(1, lists2);
+            EXPECT(rt::d3d12::last_execute_result(queue.p) == leonida::ReplayResult::success);
+            EXPECT(SUCCEEDED(queue->Signal(fence.p, 3)));
+            EXPECT(SUCCEEDED(fence->SetEventOnCompletion(3, nullptr)));
+
+            EXPECT(SUCCEEDED(readback2->Map(0, nullptr, &mapped2)));
+            const Texel expected_ps{81, 180, 0, 255};
+            unsigned misses[4]{};
+            for (size_t i = 0; i < pixels.size(); ++i) {
+                const int value = static_cast<const UINT8*>(mapped2)[i];
+                misses[i % 4] += std::abs(value - expected_ps[i % 4]) > 1;
+            }
+            const auto* first = static_cast<const UINT8*>(mapped2);
+            std::printf("literal PS RGBA %u %u %u %u, channel mismatches %u %u %u %u\n",
+                        first[0], first[1], first[2], first[3], misses[0], misses[1], misses[2], misses[3]);
+            readback2->Unmap(0, nullptr);
+            EXPECT(SUCCEEDED(readback->Map(0, nullptr, &mapped)));
+            std::array<float, 4> result{};
+            std::memcpy(result.data(), mapped, sizeof(result));
+            readback->Unmap(0, nullptr);
+            const Texel expected_cs{81, 180, 171, 255};
+            bool matched = true;
+            for (unsigned i = 0; i < result.size(); ++i) {
+                const float value = result[i] * 255.0f;
+                std::printf("literal CS word %u scaled %.3f expected %u\n", i, value, expected_cs[i]);
+                matched &= std::abs(value - expected_cs[i]) <= 1 && !misses[i];
+            }
+            EXPECT(matched);
+            EXPECT(graphics_indices[0] && graphics_indices[1] && graphics_indices[0] != graphics_indices[1]);
+            EXPECT(shared_indices() == graphics_indices);
+        }
 
         // The entries are still there after the draws.
         EXPECT(rt::d3d12::bindless_hash_lookup(device.p, key_a) == index_a);

@@ -468,6 +468,20 @@ class TestSBitset1B32EdgeCases(unittest.TestCase):
             acc = ref_s_bitset1_b32(acc, b)
         self.assertEqual(acc, 0xFFFFFFFF)
 
+class TestSBitset1B32Translator(unittest.TestCase):
+    def test_translate_s_bitset1_b32(self):
+        lines = [
+            "s_mov_b32 s0, 0x00000000",
+            "s_bitset1_b32 s0, 4",
+            "v_mov_b32 v0, s0",
+            "exp mrt0 v0, v0, v0, v0 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_bs1", lines)
+        self.assertIn("OpEntryPoint", spv)
+        words = mrt0_words(spv)
+        self.assertEqual(words, [0x00000010, 0x00000010, 0x00000010, 0x00000010])
+
 
 if __name__ == "__main__":
     unittest.main()

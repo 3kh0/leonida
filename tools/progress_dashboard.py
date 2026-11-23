@@ -637,7 +637,7 @@ def collect_corpus(col, work):
         col.source("corpus", None, "missing", note="no <work>/shaders/dxbc/index.json (run make_game.py's shaders stage)")
         return
     carved = json.loads(read_utf8(carved_p))
-    entries = [(None, e) for e in carved] if isinstance(carved, list) else list(carved.items())
+    entries = ((None, e) for e in carved) if isinstance(carved, list) else carved.items()
     per_stage = {}
     carved_stages = {}
     for key, e in entries:
@@ -670,7 +670,7 @@ def collect_corpus(col, work):
         col.source("corpus_spirv", "<work>/shaders/spirv/index.json", "ok", len(spirv), note=note)
     else:
         col.source("corpus_spirv", "<work>/shaders/spirv/index.json", "missing", note="translation not finished")
-    col.source("corpus_carved", "<work>/shaders/dxbc/index.json", "ok", len(entries))
+    col.source("corpus_carved", "<work>/shaders/dxbc/index.json", "ok", len(carved))
     for st, (n_carved, n_valid) in sorted(per_stage.items()):
         stage = str(st)
         if n_valid:
@@ -680,7 +680,7 @@ def collect_corpus(col, work):
         if rest:
             col.add(f"corpus.{stage}.not_validated", "corpus", stage, f"{stage}: not translated or rejected by spirv-val",
                     "failed", detail=f"{rest:,} of {n_carved:,} carved", weight=rest, count=rest)
-    col.metric("corpus.validated", "corpus", "Carved shaders that translate and pass spirv-val", validated_total, len(entries),
+    col.metric("corpus.validated", "corpus", "Carved shaders that translate and pass spirv-val", validated_total, len(carved),
                "entries in <work>/shaders/dxbc/index.json with a matching filename stem and stage in "
                "<work>/shaders/spirv/index.json without an error / entries in <work>/shaders/dxbc/index.json",
                note="validation is not execution: nothing here says a shader's output is right")

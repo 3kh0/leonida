@@ -242,5 +242,12 @@ class VFrexpExpI16F16SimdDivergenceTests(unittest.TestCase):
         for i in range(16, 32):
             self.assertEqual(wave.get_vgpr(i), 0x9999)
 
+class VFrexpExpI16F16EdgeCasesTests(unittest.TestCase):
+    def test_frexp_exp_zeros_and_specials(self):
+        self.assertEqual(oracle_frexp_exp_i16_f16(F16_POS_ZERO), 0)
+        self.assertEqual(oracle_frexp_exp_i16_f16(F16_NEG_ZERO), 0)
+        self.assertEqual(oracle_frexp_exp_i16_f16(F16_POS_INF), 0)
+        self.assertEqual(oracle_frexp_exp_i16_f16(F16_QNAN), 0)
+
 if __name__ == "__main__":
     unittest.main()

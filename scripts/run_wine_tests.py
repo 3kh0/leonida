@@ -101,15 +101,20 @@ class DriveMap:
         return self
 
     def __exit__(self, *exc):
-        if self.link:
-            try:
-                owns_link = os.readlink(self.link) == self.scratch
-            except OSError:
-                owns_link = False  # It may have been removed or replaced with a regular file.
-            if owns_link:
-                os.unlink(self.link)
-        if self.scratch:
-            shutil.rmtree(self.scratch, ignore_errors=True)   # removes the links, never what they point to
+        try:
+            if self.link:
+                try:
+                    owns_link = os.readlink(self.link) == self.scratch
+                except OSError:
+                    owns_link = False  # It may have been removed or replaced with a regular file.
+                if owns_link:
+                    try:
+                        os.unlink(self.link)
+                    except FileNotFoundError:
+                        pass  # Another process may remove it after the ownership check.
+        finally:
+            if self.scratch:
+                shutil.rmtree(self.scratch, ignore_errors=True)   # removes the links, never what they point to
         return False
 
 

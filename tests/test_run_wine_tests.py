@@ -418,6 +418,44 @@ class DriveMapTest(unittest.TestCase):
         self.assertFalse(os.path.exists(scratch))
         self.assertFalse(os.path.lexists(self.link))
 
+    def test_a_drive_removed_after_the_ownership_read_still_cleans_scratch(self):
+        scratch = self.root.parent / "scratch"
+        scratch.mkdir()
+        readlink = os.readlink
+
+        def remove_after_readlink(path):
+            target = readlink(path)
+            if Path(path) == self.link:
+                # Another process removes the mapping after readlink has obtained our target.
+                self.link.unlink()
+            return target
+
+        with mock.patch.object(rwt.tempfile, "mkdtemp", return_value=str(scratch)), \
+                mock.patch.object(rwt.os, "readlink", side_effect=remove_after_readlink):
+            with rwt.DriveMap("D:/a/b", str(self.root), str(self.prefix)):
+                self.assertTrue(os.path.lexists(self.link))
+        self.assertFalse(os.path.lexists(self.link))
+        self.assertFalse(scratch.exists())
+        self.assertTrue((self.root / "runtime" / "build" / "generated" / "cs.spv").is_file())
+
+    def test_a_drive_unlink_error_still_cleans_scratch_and_propagates(self):
+        scratch = self.root.parent / "scratch"
+        scratch.mkdir()
+        unlink = os.unlink
+
+        def deny_drive_unlink(path, *args, **kwargs):
+            if Path(path) == self.link:
+                raise PermissionError("drive unlink denied")
+            return unlink(path, *args, **kwargs)
+
+        with mock.patch.object(rwt.tempfile, "mkdtemp", return_value=str(scratch)), \
+                mock.patch.object(rwt.os, "unlink", side_effect=deny_drive_unlink), \
+                self.assertRaisesRegex(PermissionError, "drive unlink denied"):
+            with rwt.DriveMap("D:/a/b", str(self.root), str(self.prefix)):
+                self.assertTrue(os.path.lexists(self.link))
+        self.assertTrue(os.path.lexists(self.link))
+        self.assertFalse(scratch.exists())
+
     def test_main_maps_the_drive_while_the_tests_run(self):
         # The "Wine" here is the Python interpreter, so the program reads the drive through its dosdevices link, which
         # is where Wine resolves D:/win/root/... too.

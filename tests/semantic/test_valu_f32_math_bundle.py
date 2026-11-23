@@ -764,5 +764,43 @@ class TestLdexpF32ScalarInterpreter(unittest.TestCase):
         self.assertEqual(self.machine.vgprs[0], f32_to_bits(8.0))
 
 
+# ------------------------------------------------------------------------------
+# v_ldexp_f32 SIMD Divergence and EXEC Masking
+# ------------------------------------------------------------------------------
+
+class SIMDWaveLdexp:
+    def __init__(self, wave_size: int = 64):
+        self.wave_size = wave_size
+        self.vgprs: List[List[int]] = [[0] * wave_size for _ in range(256)]
+        self.exec_mask: int = (1 << wave_size) - 1
+
+    def step(self, insn: VLdexpF32Instruction):
+        for lane in range(self.wave_size):
+            if (self.exec_mask >> lane) & 1:
+                s0 = self.vgprs[insn.src0.index][lane]
+                s1 = self.vgprs[insn.src1.index][lane]
+                self.vgprs[insn.dst.index][lane] = ref_ldexp_f32(s0, s1)
+
+
+class TestLdexpF32SIMDDivergence(unittest.TestCase):
+    def test_simd_execution(self):
+        wave = SIMDWaveLdexp(wave_size=32)
+        for lane in range(32):
+            wave.vgprs[1][lane] = f32_to_bits(1.0)
+            wave.vgprs[2][lane] = lane - 10
+            wave.vgprs[0][lane] = 0
+
+        insn = VLdexpF32Instruction(
+            dst=RegisterOperand(OperandType.VGPR, 0),
+            src0=RegisterOperand(OperandType.VGPR, 1),
+            src1=RegisterOperand(OperandType.VGPR, 2),
+        )
+        wave.step(insn)
+
+        for lane in range(32):
+            expected = ref_ldexp_f32(f32_to_bits(1.0), lane - 10)
+            self.assertEqual(wave.vgprs[0][lane], expected)
+
+
 if __name__ == '__main__':
     unittest.main()

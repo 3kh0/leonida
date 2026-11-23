@@ -600,6 +600,13 @@ if(BUILD_TESTING)
     set_target_properties(tiny_xmem_startup PROPERTIES
       RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixtures/game/$<CONFIG>"
     )
+    add_executable(tiny_xmem_physical test/fixtures/tiny_xmem_physical.cpp)
+    target_link_libraries(tiny_xmem_physical PRIVATE xmem_stub)
+    target_compile_definitions(tiny_xmem_physical PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+    target_compile_options(tiny_xmem_physical PRIVATE /W4 /permissive- /utf-8)
+    set_target_properties(tiny_xmem_physical PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/fixtures/game/$<CONFIG>"
+    )
     add_library(tiny_bundled_dll SHARED test/fixtures/tiny_bundled_dll.cpp test/fixtures/tiny_bundled_dll.def)
     target_link_libraries(tiny_bundled_dll PRIVATE xmem_stub)
     target_compile_definitions(tiny_bundled_dll PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
@@ -1067,6 +1074,11 @@ if(BUILD_TESTING)
     set_tests_properties(run_tiny_xmem_startup PROPERTIES
       PASS_REGULAR_EXPRESSION "tiny_xmem_startup: OK[\r\n]+game exited with code 0"
       FAIL_REGULAR_EXPRESSION "tiny_xmem_startup: FAIL;game exited with code [1-9]"
+      TIMEOUT 60)
+    add_test(NAME run_tiny_xmem_physical COMMAND gta6rt --run $<TARGET_FILE:tiny_xmem_physical>)
+    set_tests_properties(run_tiny_xmem_physical PROPERTIES
+      PASS_REGULAR_EXPRESSION "tiny_xmem_physical: OK[\r\n]+game exited with code 0"
+      FAIL_REGULAR_EXPRESSION "tiny_xmem_physical: FAIL;game exited with code [1-9]"
       TIMEOUT 60)
     add_test(NAME run_startup_cmdline COMMAND ${CMAKE_COMMAND}
       "-DLOADER=$<TARGET_FILE:gta6rt>" "-DGUEST=$<TARGET_FILE:tiny_startup_cmdline>"

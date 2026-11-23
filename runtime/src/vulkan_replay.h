@@ -1012,6 +1012,10 @@ struct Prepared {
     std::vector<std::array<VkDeviceSize, 2>> fills;  // ... buffer byte ranges, offset and size
     VkBuffer fill_scratch = VK_NULL_HANDLE;         // short buffer clears: one repeated 8-byte pattern
     VkDeviceSize fill_scratch_offset = 0;
+    // A stencil clear with rects past mip 0: the stencil value, filled into a scratch range, copied once per rect.
+    std::vector<VkBufferImageCopy> stencil_copies;
+    VkBuffer stencil_scratch = VK_NULL_HANDLE;
+    VkDeviceSize stencil_scratch_offset = 0, stencil_scratch_bytes = 0;
     QueryPool* queries = nullptr;  // query commands: the heap
     ComputePipeline pipeline;  // dispatches
     std::uint32_t draw = 0;    // draws: its PreparedDraw in PreparedList::draws
@@ -1077,10 +1081,26 @@ inline double round_half_even(double x) {
     return r - x == 0.5 && std::fmod(r, 2.0) != 0.0 ? r - 1.0 : r;
 }
 
+// D3D multiplies a clear value by the channel's largest value in float (WARP: a D16 depth of 0.681063533 is 44633.5
+// in float, a tie that goes to the even 44634, but 44633.4999... in double, which rounds down). The product is exact
+// in a double; this returns the float nearest to it, ties to even, whatever the thread's rounding mode (a cast to
+// float follows the mode).
+inline double nearest_float(double x) {
+    const float cast = static_cast<float>(x);
+    const float lo = double(cast) <= x ? cast : std::nextafter(cast, -HUGE_VALF);
+    if (double(lo) == x) return lo;
+    const float hi = std::nextafter(lo, HUGE_VALF);
+    const double below = x - double(lo), above = double(hi) - x;
+    if (below != above) return below < above ? lo : hi;
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &lo, sizeof bits);
+    return (bits & 1u) ? hi : lo;
+}
+
 inline float quantize_unorm(float value, double maximum) {
     if (!(value > 0.0f)) return 0.0f;
     if (value >= 1.0f) return 1.0f;
-    return static_cast<float>(round_half_even(double(value) * maximum) / maximum);
+    return static_cast<float>(round_half_even(nearest_float(double(value) * maximum)) / maximum);
 }
 
 // The same for a signed normalised format: -1..1 on a scale of 127 (8 bits) or 32767 (16 bits), where D3D writes -1.0
@@ -1088,8 +1108,9 @@ inline float quantize_unorm(float value, double maximum) {
 inline float quantize_snorm(float value, double maximum) {
     if (!(value > -1.0f)) return value != value ? 0.0f : -1.0f;
     if (value >= 1.0f) return 1.0f;
-    return static_cast<float>(round_half_even(double(value) * maximum) / maximum);
+    return static_cast<float>(round_half_even(nearest_float(double(value) * maximum)) / maximum);
 }
+
 
 // ClearRenderTargetView takes FLOATs even for integer RTVs. Windows D3D12 (WARP and AMD) clamps to the
 // component range and truncates fractions. Vulkan instead interprets the matching union member as an integer
@@ -1143,14 +1164,23 @@ inline VkClearColorValue render_target_clear_color(VkFormat format, const ClearC
     case VK_FORMAT_R16_UNORM:
     case VK_FORMAT_R16G16_UNORM:
     case VK_FORMAT_R16G16B16A16_UNORM: is_integer = false; unorm = {65535, 65535, 65535, 65535}; break;
+    // B5G6R5, B5G5R5A1, B4G4R4A4: NVIDIA (621.14) converts 4-, 5- and 6-bit channels through 8 bits, so B5G6R5 green
+    // 0.3739 clears to 23 where WARP writes 24; the exact fraction comes through.
+    case VK_FORMAT_R5G6B5_UNORM_PACK16: is_integer = false; unorm = {31, 63, 31, 0}; break;
+    case VK_FORMAT_A1R5G5B5_UNORM_PACK16: is_integer = false; unorm = {31, 31, 31, 1}; break;
+    case VK_FORMAT_A4R4G4B4_UNORM_PACK16: is_integer = false; unorm = {15, 15, 15, 15}; break;
     default: is_integer = false; break;
     }
     if (format != VK_FORMAT_A2B10G10R10_UINT_PACK32) alpha_high = high;
     VkClearColorValue value{};
     for (std::size_t i = 0; i < input.size(); ++i) {
         if (!is_integer) {
+            const bool srgb_colour = (format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_B8G8R8A8_SRGB) && i < 3;
             if (snorm != 0) value.float32[i] = quantize_snorm(input[i], snorm);
-            else value.float32[i] = unorm[i] != 0.0 ? quantize_unorm(input[i], unorm[i]) : input[i];
+            else if (unorm[i] != 0.0) value.float32[i] = quantize_unorm(input[i], unorm[i]);
+            else if (srgb_colour) value.float32[i] = input[i];  // the GPU's sRGB curve
+            else  // a float format: D3D12 flushes a denormal to a zero of its sign (WARP); Vulkan keeps it in R32_SFLOAT
+                value.float32[i] = std::fpclassify(input[i]) == FP_SUBNORMAL ? std::copysign(0.0f, input[i]) : input[i];
             continue;
         }
         const double maximum = i == 3 ? alpha_high : high;
@@ -2653,6 +2683,34 @@ ReplayResult prepare(const CommandList& list, Resolve&& resolve, const ReplayFun
                 r != ReplayResult::success)
                 return r;
             if (!p.skip && p.rects.empty() && !vk.clear_depth_stencil_image) return ReplayResult::unsupported;
+            // NVIDIA's Vulkan driver (621.14, RTX 5060 Ti) writes the stencil of a depth-stencil attachment view of a
+            // mip past 0 into mip 0, through vkCmdClearAttachments and loadOp CLEAR alike, with no validation message
+            // (issue 5256 has a standalone repro); depth goes to the right mip. So the stencil part of a clear with
+            // rects past mip 0 is copied from a scratch range filled with the stencil value, one copy per rect, which is
+            // exact on every driver. Without scratch it stays on the attachment path.
+            p.stencil_copies.clear();
+            if (!p.skip && !p.rects.empty() && (aspects & VK_IMAGE_ASPECT_STENCIL_BIT) && depth_clear->target.mip > 0 &&
+                vk.copy_buffer_to_image && vk.fill_buffer && vk.copy_scratch) {
+                VkDeviceSize most = 0;
+                for (const VkClearRect& r : p.rects)
+                    most = std::max<VkDeviceSize>(most, VkDeviceSize(r.rect.extent.width) * r.rect.extent.height *
+                                                            r.layerCount);
+                const VkDeviceSize bytes = (most + 3) / 4 * 4;  // vkCmdFillBuffer fills whole words
+                if (bytes && vk.copy_scratch(bytes + 4, p.stencil_scratch, p.stencil_scratch_offset)) {
+                    // A depth/stencil copy's bufferOffset must be a multiple of 4.
+                    p.stencil_scratch_offset += (4 - p.stencil_scratch_offset % 4) % 4;
+                    p.stencil_scratch_bytes = bytes;
+                    for (const VkClearRect& r : p.rects) {
+                        VkBufferImageCopy copy{};
+                        copy.bufferOffset = p.stencil_scratch_offset;
+                        copy.imageSubresource = {VK_IMAGE_ASPECT_STENCIL_BIT, depth_clear->target.mip,
+                                                 depth_clear->target.first_layer + r.baseArrayLayer, r.layerCount};
+                        copy.imageOffset = {r.rect.offset.x, r.rect.offset.y, 0};
+                        copy.imageExtent = {r.rect.extent.width, r.rect.extent.height, 1};
+                        p.stencil_copies.push_back(copy);
+                    }
+                }
+            }
         } else if (const auto* uav = std::get_if<ClearUnorderedAccess>(&command)) {
             const UavView& view = uav->view;
             if (!bind(view.resource)) return ReplayResult::unresolved_resource;
@@ -3530,7 +3588,7 @@ inline void emit(const PreparedList& prepared, VkCommandBuffer command_buffer, c
             const float depth = p.binding.depth24 ? depth24_clear_value(depth_clear->depth)  // see depth24.h
                                 : p.binding.format == VK_FORMAT_D16_UNORM
                                     ? detail::quantize_unorm(depth_clear->depth, 65535.0)  // see quantize_unorm
-                                    : depth_clear->depth;
+                                    : depth_clear_value(depth_clear->depth);  // a denormal clears to 0
             const VkClearDepthStencilValue value{depth, depth_clear->stencil};
             if (p.rects.empty()) {
                 detail::round_trip(vk, command_buffer, p.binding, pieces, image_layout(p.binding, transfer_dst.layout),
@@ -3541,24 +3599,42 @@ inline void emit(const PreparedList& prepared, VkCommandBuffer command_buffer, c
                 continue;
             }
             const VkImageLayout attachment = image_layout(p.binding, state.layout);
-            detail::round_trip(vk, command_buffer, p.binding, pieces, attachment, state, state.access,
-                               state.stages, [&] {
-                VkRenderingAttachmentInfo info{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
-                info.imageView = p.view;
-                info.imageLayout = attachment;
-                info.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-                info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-                VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
-                rendering.renderArea = {{0, 0}, detail::mip_extent(p.binding, depth_clear->target.mip)};
-                rendering.layerCount = depth_clear->target.layer_count;
-                if (p.range.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) rendering.pDepthAttachment = &info;
-                if (p.range.aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) rendering.pStencilAttachment = &info;
-                vk.begin_rendering(command_buffer, &rendering);
-                VkClearAttachment attachment_clear{p.range.aspectMask, 0, {}};
-                attachment_clear.clearValue.depthStencil = value;
-                vk.clear_attachments(command_buffer, 1, &attachment_clear, std::uint32_t(p.rects.size()), p.rects.data());
-                vk.end_rendering(command_buffer);
-            });
+            // The aspects cleared through the attachment: all of them, or depth only when the stencil is copied.
+            const VkImageAspectFlags attached =
+                p.stencil_copies.empty() ? p.range.aspectMask : (p.range.aspectMask & ~VK_IMAGE_ASPECT_STENCIL_BIT);
+            if (attached)
+                detail::round_trip(vk, command_buffer, p.binding, pieces, attachment, state, state.access,
+                                   state.stages, [&] {
+                    VkRenderingAttachmentInfo info{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+                    info.imageView = p.view;
+                    info.imageLayout = attachment;
+                    info.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                    info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+                    VkRenderingInfo rendering{VK_STRUCTURE_TYPE_RENDERING_INFO};
+                    rendering.renderArea = {{0, 0}, detail::mip_extent(p.binding, depth_clear->target.mip)};
+                    rendering.layerCount = depth_clear->target.layer_count;
+                    if (attached & VK_IMAGE_ASPECT_DEPTH_BIT) rendering.pDepthAttachment = &info;
+                    if (attached & VK_IMAGE_ASPECT_STENCIL_BIT) rendering.pStencilAttachment = &info;
+                    vk.begin_rendering(command_buffer, &rendering);
+                    VkClearAttachment attachment_clear{attached, 0, {}};
+                    attachment_clear.clearValue.depthStencil = value;
+                    vk.clear_attachments(command_buffer, 1, &attachment_clear, std::uint32_t(p.rects.size()),
+                                         p.rects.data());
+                    vk.end_rendering(command_buffer);
+                });
+            if (!p.stencil_copies.empty()) {
+                const std::uint32_t stencil = depth_clear->stencil & 0xffu;
+                vk.fill_buffer(command_buffer, p.stencil_scratch, p.stencil_scratch_offset, p.stencil_scratch_bytes,
+                               stencil * 0x01010101u);
+                detail::memory_barrier(vk, command_buffer, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                       VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                const VkImageLayout copy_layout = image_layout(p.binding, transfer_dst.layout);
+                detail::round_trip(vk, command_buffer, p.binding, pieces, copy_layout, state, transfer_dst.access,
+                                   transfer_dst.stages, [&] {
+                    vk.copy_buffer_to_image(command_buffer, p.stencil_scratch, p.binding.image, copy_layout,
+                                            std::uint32_t(p.stencil_copies.size()), p.stencil_copies.data());
+                });
+            }
         } else if (const auto* uav = std::get_if<ClearUnorderedAccess>(&command)) {
             if (p.skip) continue;
             // The UAV state, widened to transfers: a later barrier from SYNC_CLEAR_UNORDERED_ACCESS_VIEW names the

@@ -178,6 +178,26 @@ class TestVSubF16ASTAndInterpreter(unittest.TestCase):
         words = support.mrt0_words(spv)
         self.assertEqual(words[0] & 0xFFFF, 0x4000)
 
+class TestVSubF16SIMDAndIEEE(unittest.TestCase):
+    """Stage 3 for v_sub_f16: SIMD multi-lane divergence, IEEE 754 edge cases, and register preservation."""
+
+    def test_v_sub_f16_edge_cases_and_preservation(self):
+        cases = [([0, 0], 0), ([15360, 15360], 0), ([31744, 15360], 31744), ([64512, 15360], 64512), ([16384, 15360], 15360)]
+        for inputs, expected in cases:
+            with self.subTest(inputs=inputs):
+                lines = ["v_mov_b32 v0, 0x55AA0000"]
+                for i, val in enumerate(inputs, 1):
+                    lines.append(f"v_mov_b32 v{i}, {val:#x}")
+                srcs = ", ".join(f"v{i}" for i in range(1, len(inputs) + 1))
+                lines.append(f"v_sub_f16 v0, {srcs}")
+                for i in range(1, 4):
+                    lines.append(f"v_mov_b32 v{i}, 0")
+                words = run_bundle_ps(lines, f"ps_edge_v_sub_f16_{inputs[0]:#x}")
+                lo = words[0] & 0xFFFF
+                hi = (words[0] >> 16) & 0xFFFF
+                self.assertEqual(hi, 0x55AA)
+                self.assertEqual(lo, expected)
+
 
 if __name__ == '__main__':
     unittest.main()

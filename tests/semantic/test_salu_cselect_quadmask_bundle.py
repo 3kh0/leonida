@@ -84,6 +84,22 @@ class TestSCSelectB32Interpreter(unittest.TestCase):
         self.assertEqual(state.sgpr[1], 0xBEEF)
         self.assertEqual(state.scc, 0)
 
+class TestSCSelectB32EdgeCases(unittest.TestCase):
+    def test_extremum_constants(self):
+        self.assertEqual(ref_s_cselect_b32(1, 0x80000000, 0x7FFFFFFF), 0x80000000)
+        self.assertEqual(ref_s_cselect_b32(0, 0x80000000, 0x7FFFFFFF), 0x7FFFFFFF)
+
+    def test_identical_operands(self):
+        self.assertEqual(ref_s_cselect_b32(1, 0xAAAA5555, 0xAAAA5555), 0xAAAA5555)
+        self.assertEqual(ref_s_cselect_b32(0, 0xAAAA5555, 0xAAAA5555), 0xAAAA5555)
+
+    def test_simd_mask_branch_selection(self):
+        for scc in (0, 1):
+            selected = ref_s_cselect_b32(scc, 0xFFFFFFFF, 0x00000000)
+            lanes = [1 if (selected & (1 << (i % 32))) != 0 else 0 for i in range(64)]
+            expected_lane = 1 if scc == 1 else 0
+            self.assertTrue(all(bit == expected_lane for bit in lanes))
+
 
 if __name__ == "__main__":
     unittest.main()

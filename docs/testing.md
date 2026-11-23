@@ -176,8 +176,11 @@ as CI does: `WINEPREFIX="$HOME/.local/share/leonida-wine" xvfb-run -a ctest --te
 
 `scripts/run_wine_tests.py` (what CI uses) turns Wine's crash debugger off in the prefix for the run, so a test that Wine
 aborts fails at once instead of waiting for `winedbg` until the timeout, and puts the setting back afterwards. A run
-that is killed with SIGKILL cannot put it back and leaves `Debugger` set to `false`; restore it with
-`WINEPREFIX=<prefix> wine reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug" /v Debugger /t REG_SZ /d "winedbg --auto %ld %ld" /f`.
+that is killed with SIGKILL cannot put it back and leaves `Debugger` set to `false`. The runner prints, before the
+tests start, the command that undoes it for that prefix: if the prefix had the default value it is
+`WINEPREFIX=<prefix> wine reg add "HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug" /v Debugger /t REG_SZ /d "winedbg --auto %ld %ld" /f`,
+and if it had no value it is
+`WINEPREFIX=<prefix> wine reg delete "HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug" /v Debugger /f`.
 Do not run two of them on one prefix at the same time, and give `--keep-wine-debugger` if you want `winedbg`'s backtrace.
 
 The build type defaults to `RelWithDebInfo`: xwin leaves out the debug CRT, so `Debug` needs `--include-debug-libs`.

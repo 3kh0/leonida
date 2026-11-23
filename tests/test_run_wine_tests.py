@@ -448,6 +448,17 @@ class WineDebuggerTest(unittest.TestCase):
                 self.assertEqual(self.read()["debugger"], value)
                 self.assertEqual([c[0] for c in self.read()["calls"]], ["query"])
 
+    def test_the_way_back_is_printed_before_the_run_for_both_prior_states(self):
+        # A run killed with SIGKILL cannot restore the value: the note printed at the start must undo exactly what was done.
+        self.set_debugger(self.DEFAULT)
+        with self.enter() as dbg:
+            self.assertIn('reg add', dbg.note)
+            self.assertIn('/d "winedbg --auto %ld %ld"', dbg.note)
+        self.set_debugger(None)
+        with self.enter() as dbg:
+            self.assertIn('reg delete', dbg.note)
+            self.assertNotIn('reg add', dbg.note)
+
     def test_an_empty_value_is_left_alone(self):
         self.set_debugger("", "REG_SZ")
         with self.enter():

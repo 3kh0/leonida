@@ -159,8 +159,17 @@ class WineDebugger:
             self.note = "could not set the crash debugger: a crashing test waits for winedbg"
             return self
         self.active = True
-        self.note = "Wine's crash debugger is off for this run: an aborted test ends at once"
+        # Printed before the tests run, so a run killed with SIGKILL still left the exact way back in its log.
+        self.note = ("Wine's crash debugger is off for this run: an aborted test ends at once. "
+                     f"If this run is killed, put it back with: {self.restore_command()}")
         return self
+
+    def restore_command(self) -> str:
+        """The command that puts the prefix back as it was: the default value again, or no value when there was none."""
+        if self.previous is not None:
+            return (f'WINEPREFIX="{self.prefix}" wine reg add "{self.KEY}" /v Debugger /t REG_SZ '
+                    f'/d "{self.previous}" /f')
+        return f'WINEPREFIX="{self.prefix}" wine reg delete "{self.KEY}" /v Debugger /f'
 
     def __exit__(self, *exc):
         if not self.active:
@@ -173,11 +182,8 @@ class WineDebugger:
                 restored = result is not None and result[0] == 0
             if restored:
                 return False
-        by_hand = (f'WINEPREFIX="{self.prefix}" wine reg add "{self.KEY}" /v Debugger /t REG_SZ /d "{self.previous}" /f'
-                   if self.previous is not None else
-                   f'WINEPREFIX="{self.prefix}" wine reg delete "{self.KEY}" /v Debugger /f')
         print(f"WARNING: could not restore Wine's crash debugger in {self.prefix}; it is still 'false'. "
-              f"Restore it with: {by_hand}", file=sys.stderr, flush=True)
+              f"Restore it with: {self.restore_command()}", file=sys.stderr, flush=True)
         return False
 
 

@@ -565,8 +565,10 @@ What is implemented (all of it testable without the game):
   not yet submitted is held on the CPU so layouts follow dependency order (section 4.4). Caller-owned Vulkan devices can
   supply additional handles through `VulkanDeviceInfo::command_queues`; without them they retain legacy single-queue
   behavior. When supplied handles are exhausted, `CreateCommandQueue` fails instead of silently sharing a queue.
-  Compute and copy queues use a dedicated compute or transfer family where the GPU has one (`queue_families.h`),
-  and resources are then shared `CONCURRENT` across the families (section 4.4).
+  Compute and copy queues use a dedicated compute or transfer family when the runtime selects one
+  (`queue_families.h`; on a device with sparse buffers a dedicated family without sparse binding is passed over
+  for the graphics family, `sparse_capable_queue_families`), and resources are then shared `CONCURRENT` across
+  the families (section 4.4).
 
 Descriptors and the bindless set (milestone M2), from the shader's
 side inwards:

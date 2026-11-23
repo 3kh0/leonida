@@ -1082,7 +1082,7 @@ def iter_catalogues_in_dir(path: str, *, max_inflate: int = MAX_INFLATE) -> Iter
     manifest = os.path.join(path, "index.json")
     if os.path.isfile(manifest):
         try:
-            with open(manifest, encoding="utf-8") as fh:
+            with open(manifest, encoding="utf-8-sig") as fh:
                 doc = json.load(fh)
         except (OSError, json.JSONDecodeError):
             doc = None
@@ -1498,7 +1498,7 @@ def _cmd_resolve(args: argparse.Namespace) -> int:
     names: list[str] = list(args.name or ())
     if args.names_file:
         try:
-            with open(args.names_file, encoding="utf-8") as fh:
+            with open(args.names_file, encoding="utf-8-sig") as fh:
                 for line in fh:
                     s = line.strip()
                     if s and not s.startswith("#"):

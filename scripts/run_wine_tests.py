@@ -99,6 +99,63 @@ class DriveMap:
         return False
 
 
+class WineDebugger:
+    """Makes a process that Wine aborts end at once, for the run, instead of waiting for its crash debugger.
+
+    Wine's default crash handler (HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug, "winedbg --auto") is
+    started for an unhandled exception, such as a call to a function this Wine does not implement ("Unimplemented
+    function KERNEL32.dll.CopyFile2 ... starting debugger..."). Under Xvfb it never ends, so the test sat until
+    --timeout (120 s each). With Debugger set to "false" the process dies in under a second with a non-zero exit code,
+    which is the same failure, only quick. The old value is put back afterwards. Nothing is done for a missing
+    prefix, with keep=True, or when the prefix names a debugger other than winedbg. A failing "wine reg" only leaves
+    the old behaviour (and a note); it never fails the run.
+    """
+
+    KEY = r"HKLM\Software\Microsoft\Windows NT\CurrentVersion\AeDebug"
+
+    def __init__(self, wine: list[str], prefix: str, keep: bool = False):
+        self.wine, self.prefix, self.keep = list(wine), prefix, keep
+        self.active, self.previous = False, None
+        self.note = ""
+
+    def _reg(self, *argv: str) -> tuple[int, str] | None:
+        try:
+            proc = subprocess.run(self.wine + ["reg", *argv], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                  timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return proc.returncode, proc.stdout.decode("utf-8", "replace")
+
+    def __enter__(self):
+        if self.keep or not os.path.isdir(os.path.join(self.prefix, "dosdevices")):
+            return self
+        query = self._reg("query", self.KEY, "/v", "Debugger")
+        if query is None:
+            self.note = "wine reg did not run: the crash debugger is left as it is"
+            return self
+        m = re.search(r"^\s*Debugger\s+REG_SZ\s*(.*?)\s*$", query[1], re.MULTILINE) if query[0] == 0 else None
+        self.previous = m.group(1) if m else None
+        if self.previous and "winedbg" not in self.previous:
+            self.note = f"the prefix uses its own crash debugger ({self.previous}): left as it is"
+            self.previous = None
+            return self
+        added = self._reg("add", self.KEY, "/v", "Debugger", "/t", "REG_SZ", "/d", "false", "/f")
+        if added is None or added[0] != 0:
+            self.note = "could not set the crash debugger: a crashing test waits for winedbg"
+            return self
+        self.active = True
+        self.note = "Wine's crash debugger is off for this run: an aborted test ends at once"
+        return self
+
+    def __exit__(self, *exc):
+        if self.active:
+            if self.previous:
+                self._reg("add", self.KEY, "/v", "Debugger", "/t", "REG_SZ", "/d", self.previous, "/f")
+            else:
+                self._reg("delete", self.KEY, "/v", "Debugger", "/f")
+        return False
+
+
 def wine_path(path: str) -> str:
     """Wine's Z: drive is the Unix root, so a Windows program reads /x/y as Z:\\x\\y."""
     return "Z:" + os.path.abspath(path).replace("/", "\\")
@@ -249,6 +306,8 @@ def main() -> int:
                     help="maximum seconds per test; a shorter CTest TIMEOUT applies (default 120)")
     ap.add_argument("--summary", help="append a Markdown table to this file (e.g. $GITHUB_STEP_SUMMARY)")
     ap.add_argument("--label", help="named in the summary's heading, e.g. the Wine version")
+    ap.add_argument("--keep-wine-debugger", action="store_true",
+                    help="leave Wine's crash debugger (winedbg) on: an aborted test then waits for it until --timeout")
     args = ap.parse_args()
 
     tests = read_tests(args.tests)
@@ -257,8 +316,11 @@ def main() -> int:
     wine = args.wine
     results = {}
     prefix = os.environ.get("WINEPREFIX") or os.path.join(os.path.expanduser("~"), ".wine")
-    with DriveMap(args.windows_root, args.root, prefix) as drive:
+    with DriveMap(args.windows_root, args.root, prefix) as drive, \
+            WineDebugger(wine, prefix, args.keep_wine_debugger) as debugger:
         print(drive.note, flush=True)
+        if debugger.note:
+            print(debugger.note, flush=True)
         for test in tests:
             name = test.get("name", "?")
             status, detail = run_test(test, args, wine)

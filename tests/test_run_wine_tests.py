@@ -365,6 +365,81 @@ class DriveMapTest(unittest.TestCase):
         self.assertFalse(os.path.lexists(self.link))
 
 
+class WineDebuggerTest(unittest.TestCase):
+    """The crash debugger is switched off for the run and put back after it, through a stand-in for `wine reg`."""
+
+    FAKE_WINE = (
+        "import json, sys\n"
+        "state_path, args = sys.argv[1], sys.argv[3:]\n"
+        "state = json.load(open(state_path))\n"
+        "state['calls'].append(args)\n"
+        "code = 0\n"
+        "if args[0] == 'query':\n"
+        "    if state['debugger'] is None:\n"
+        "        code = 1\n"
+        "    else:\n"
+        "        print('HKEY_LOCAL_MACHINE\\\\Software\\\\AeDebug')\n"
+        "        print('    Debugger    REG_SZ    ' + state['debugger'])\n"
+        "elif args[0] == 'add':\n"
+        "    state['debugger'] = args[args.index('/d') + 1]\n"
+        "elif args[0] == 'delete':\n"
+        "    state['debugger'] = None\n"
+        "json.dump(state, open(state_path, 'w'))\n"
+        "sys.exit(code)\n"
+    )
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        base = Path(self._tmp.name)
+        self.prefix = base / "prefix"
+        (self.prefix / "dosdevices").mkdir(parents=True)
+        self.state = base / "state.json"
+        script = base / "fake_wine.py"
+        script.write_text(self.FAKE_WINE, encoding="utf-8")
+        self.wine = [sys.executable, str(script), str(self.state)]
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def set_debugger(self, value):
+        self.state.write_text(json.dumps({"debugger": value, "calls": []}), encoding="utf-8")
+
+    def read(self):
+        return json.loads(self.state.read_text(encoding="utf-8"))
+
+    def test_the_debugger_is_off_during_the_run_and_restored_after(self):
+        self.set_debugger("winedbg --auto %ld %ld")
+        with rwt.WineDebugger(self.wine, str(self.prefix)) as dbg:
+            self.assertEqual(self.read()["debugger"], "false")
+            self.assertIn("crash debugger is off", dbg.note)
+        self.assertEqual(self.read()["debugger"], "winedbg --auto %ld %ld")
+
+    def test_a_prefix_without_the_value_gets_it_removed_again(self):
+        self.set_debugger(None)
+        with rwt.WineDebugger(self.wine, str(self.prefix)):
+            self.assertEqual(self.read()["debugger"], "false")
+        self.assertIsNone(self.read()["debugger"])
+
+    def test_a_debugger_the_user_set_is_left_alone(self):
+        self.set_debugger("gdb --pid %ld")
+        with rwt.WineDebugger(self.wine, str(self.prefix)) as dbg:
+            self.assertEqual(self.read()["debugger"], "gdb --pid %ld")
+            self.assertIn("its own crash debugger", dbg.note)
+        self.assertEqual(self.read()["debugger"], "gdb --pid %ld")
+
+    def test_keep_and_a_missing_prefix_change_nothing(self):
+        self.set_debugger("winedbg --auto %ld %ld")
+        with rwt.WineDebugger(self.wine, str(self.prefix), keep=True):
+            pass
+        with rwt.WineDebugger(self.wine, str(self.prefix / "missing")):
+            pass
+        self.assertEqual(self.read(), {"debugger": "winedbg --auto %ld %ld", "calls": []})
+
+    def test_an_unstartable_wine_does_not_stop_the_run(self):
+        with rwt.WineDebugger(["/nonexistent/wine"], str(self.prefix)) as dbg:
+            self.assertIn("left as it is", dbg.note)
+
+
 class MainTest(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()

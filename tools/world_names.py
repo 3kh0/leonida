@@ -671,7 +671,12 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.func(args)
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except OSError as exc:
+        # the path as typed, not str(exc)'s repr of it (which doubles every Windows backslash)
+        where = f"{exc.filename}: " if exc.filename is not None else ""
+        print(f"ERROR: {where}{exc.strerror or exc}", file=sys.stderr)
+        return 1
+    except (ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

@@ -530,5 +530,6 @@ Each run writes frame records, a state file, selected PPM readbacks, and a check
 where applicable. At the first A-button edge the guest generates a quarter-second PCM
 WAV. Playback is off by default. `--play-audio` requests playback through host WinMM
 and records its result. The runner uses a fresh output directory, or a temporary one
-when `--out` is omitted. The negative controls independently corrupt a scene byte and
-a saved-state byte and require the expected guest errors. This fixture renders offscreen.
+when `--out` is omitted. The negative controls check a corrupted scene byte, a bad
+checkpoint checksum, and a checksum-valid checkpoint whose cached page disagrees with
+the scene. Each must exit with code 1. This fixture renders offscreen.

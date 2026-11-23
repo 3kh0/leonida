@@ -7,7 +7,7 @@
 Each run renders offscreen in a fresh process and write overlay. Without --out the runs go to a temporary folder that is removed
 afterwards. The summary is printed first, and on failure the last run's log tails are printed too. Audio stays offline
 unless --play-audio sets LEONIDA_SCENE_AUDIO=winmm. The guest then plays the pulse synchronously with PlaySoundW.
---negative-controls also runs a corrupted scene.bin and a corrupted checkpoint.bin, and each one must exit with 1.
+--negative-controls checks scene data, the checkpoint checksum, and the saved page contents. Each must exit with 1.
 Exit code 0 means every check passed, 1 means a check failed and 2 means bad arguments.
 """
 from __future__ import annotations
@@ -37,7 +37,8 @@ PLAYBACK = {0: "offline", 1: "played", 3: "device error"}
 TIMEOUT = 180
 MARKER = b"GUEST_SCENE_PASS"
 NEGATIVE = {"bad-scene": ("full", b"scene.bin: not the 10 expected pages"),
-            "bad-checkpoint": ("resume", b"checkpoint.bin: bad header or checksum")}
+            "bad-checkpoint": ("resume", b"checkpoint.bin: bad header or checksum"),
+            "stale-page": ("resume", b"checkpoint.bin: state does not match the trace")}
 
 
 class Fail(Exception):
@@ -241,6 +242,16 @@ def negative_controls(session: Session, out: Path) -> dict:
     ckpt[20] ^= 0xFF
     write_new(overlay / "checkpoint.bin", bytes(ckpt))
     results["bad-checkpoint"] = session.expect_fail("bad-checkpoint", out / "package", overlay)
+    # The first resumed frame streams a new page. A stale byte in the saved page would otherwise go unnoticed.
+    overlay = out / "neg-stale-page"
+    overlay.mkdir()
+    stale = bytearray((out / "save" / "checkpoint.bin").read_bytes())
+    x, y = struct.unpack_from("<2I", stale, 4 * 4)
+    unused_byte = (x + 3 * y + 1) % PAGE_SIZE  # leave the currently selected scene byte intact
+    stale[11 * 4 + unused_byte] ^= 1  # words 11..14 store the complete page
+    struct.pack_into("<I", stale, len(stale) - 4, fnv1a(stale[:-4], 32))
+    write_new(overlay / "checkpoint.bin", bytes(stale))
+    results["stale-page"] = session.expect_fail("stale-page", out / "package", overlay)
     return results
 
 
@@ -311,7 +322,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--out", type=Path, help="new or empty folder (default: a temporary folder, removed afterwards)")
     ap.add_argument("--wine", help="run the loader through this Wine binary")
     ap.add_argument("--play-audio", action="store_true", help="LEONIDA_SCENE_AUDIO=winmm instead of offline")
-    ap.add_argument("--negative-controls", action="store_true", help="also run a bad scene.bin and checkpoint")
+    ap.add_argument("--negative-controls", action="store_true", help="also test corrupt scene data and invalid checkpoint contents")
     args = ap.parse_args()
     for name in ("loader", "guest"):
         if not getattr(args, name).is_file():

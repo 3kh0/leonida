@@ -38,6 +38,7 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 
 TOOLS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(TOOLS)
@@ -915,13 +916,16 @@ def main(argv=None) -> int:
         )
         if tex_probes:
             manifest["rgba_probes"] = tex_probes
-    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8", newline="\n") as f:
-        json.dump(manifest, f, indent=1)
-    # A previous draw no longer belongs to the newly prepared manifest.
-    try:
-        os.unlink(os.path.join(out_dir, "image.raw"))
-    except FileNotFoundError:
-        pass
+    with tempfile.TemporaryDirectory(prefix=".first-light-", dir=out_dir) as manifest_staging:
+        prepared_manifest = os.path.join(manifest_staging, "manifest.json")
+        with open(prepared_manifest, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(manifest, f, indent=1)
+        # Publish the manifest only once the old reference can no longer be used.
+        try:
+            os.unlink(os.path.join(out_dir, "image.raw"))
+        except FileNotFoundError:
+            pass
+        os.replace(prepared_manifest, os.path.join(out_dir, "manifest.json"))
     print(f"{len(vertices)} vertices, {len(indices) // 3} triangles -> {out_dir}")
     if not (a.run or a.check):
         env_preview = harness_env(manifest, out_dir, base_env={})

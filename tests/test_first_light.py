@@ -184,6 +184,19 @@ class DrawOutputTests(unittest.TestCase):
                 self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8")), previous)
 
                 obj.write_text(mesh.format(z=0.75), encoding="utf-8")
+                unlink = os.unlink
+
+                def unlink_locked_readback(path, **kwargs):
+                    if Path(path) == raw:
+                        raise PermissionError("image.raw is locked")
+                    return unlink(path, **kwargs)
+
+                with patch.object(fl.os, "unlink", side_effect=unlink_locked_readback):
+                    with self.assertRaisesRegex(PermissionError, "image.raw is locked"):
+                        fl.main(argv)
+                self.assertEqual(raw.read_bytes(), previous_raw)
+                self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8")), previous)
+
                 self.assertEqual(fl.main(argv), 0)
                 prepared = json.loads(manifest_path.read_text(encoding="utf-8"))
                 self.assertNotEqual(prepared["obj_sha256"], previous["obj_sha256"])

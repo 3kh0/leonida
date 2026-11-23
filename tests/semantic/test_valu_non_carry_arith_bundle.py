@@ -262,6 +262,14 @@ class TestVSubNcU32WrappingAndSaturation(unittest.TestCase):
         self.assertEqual(ref_v_sub_nc_u32(0, MASK32, clamp=False), 1)
         self.assertEqual(ref_v_sub_nc_u32(0, MASK32, clamp=True), 0)
 
+class TestVSubNcU32SIMD(unittest.TestCase):
+    def test_simd_lane_divergence(self) -> None:
+        datas0 = [l * 50 for l in range(32)]
+        datas1 = [100 for _ in range(32)]
+        for l in range(32):
+            got = ref_v_sub_nc_u32(datas0[l], datas1[l], clamp=True)
+            self.assertEqual(got, max(0, l * 50 - 100))
+
 
 if __name__ == "__main__":
     unittest.main()

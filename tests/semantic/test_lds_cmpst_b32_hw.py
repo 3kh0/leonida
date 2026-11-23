@@ -126,6 +126,97 @@ class TestReferenceOracleAndTranslator(unittest.TestCase):
         mem = run_cs_lds(instructions)
         self.assertEqual(mem.get(0), 0x11111111)
 
+class RegType(Enum):
+    VGPR = auto()
+
+
+@dataclass(frozen=True)
+class Operand:
+    reg_type: RegType
+    index: int = 0
+
+    def __post_init__(self):
+        if not (0 <= self.index <= 255):
+            raise ValueError(f"VGPR index {self.index} out of bounds [0, 255]")
+
+    @classmethod
+    def vgpr(cls, idx: int) -> Operand:
+        return cls(RegType.VGPR, index=idx)
+
+    def to_asm(self) -> str:
+        return f"v{self.index}"
+
+
+@dataclass(frozen=True)
+class DSCmpStB32Instruction:
+    vaddr: Operand
+    vcmp: Operand
+    vsrc: Operand
+    offset: int = 0
+    rtn: bool = False
+    vdst: Optional[Operand] = None
+
+    def __post_init__(self):
+        if not (0 <= self.offset <= 65535):
+            raise ValueError(f"Offset {self.offset} out of bounds [0, 65535]")
+        if self.rtn and self.vdst is None:
+            raise ValueError("Returning form requires vdst operand")
+        if not self.rtn and self.vdst is not None:
+            raise ValueError("Non-returning form must not have vdst operand")
+
+    def to_asm(self) -> str:
+        off_str = f" offset:{self.offset}" if self.offset != 0 else ""
+        if self.rtn:
+            return f"ds_cmpst_rtn_b32 {self.vdst.to_asm()}, {self.vaddr.to_asm()}, {self.vcmp.to_asm()}, {self.vsrc.to_asm()}{off_str}"
+        return f"ds_cmpst_b32 {self.vaddr.to_asm()}, {self.vcmp.to_asm()}, {self.vsrc.to_asm()}{off_str}"
+
+
+class TestSymbolicAST(unittest.TestCase):
+    def test_ast_construction_and_formatting(self):
+        insn1 = DSCmpStB32Instruction(
+            vaddr=Operand.vgpr(0),
+            vcmp=Operand.vgpr(1),
+            vsrc=Operand.vgpr(2),
+            offset=16,
+        )
+        self.assertEqual(insn1.to_asm(), "ds_cmpst_b32 v0, v1, v2 offset:16")
+
+        insn2 = DSCmpStB32Instruction(
+            vaddr=Operand.vgpr(0),
+            vcmp=Operand.vgpr(1),
+            vsrc=Operand.vgpr(2),
+            offset=8,
+            rtn=True,
+            vdst=Operand.vgpr(3),
+        )
+        self.assertEqual(insn2.to_asm(), "ds_cmpst_rtn_b32 v3, v0, v1, v2 offset:8")
+
+    def test_ast_immutability(self):
+        insn = DSCmpStB32Instruction(
+            vaddr=Operand.vgpr(0),
+            vcmp=Operand.vgpr(1),
+            vsrc=Operand.vgpr(2),
+        )
+        with self.assertRaises(Exception):
+            insn.offset = 4  # type: ignore
+
+    def test_ast_validation_errors(self):
+        with self.assertRaises(ValueError):
+            DSCmpStB32Instruction(
+                vaddr=Operand.vgpr(0),
+                vcmp=Operand.vgpr(1),
+                vsrc=Operand.vgpr(2),
+                offset=70000,
+            )
+        with self.assertRaises(ValueError):
+            DSCmpStB32Instruction(
+                vaddr=Operand.vgpr(0),
+                vcmp=Operand.vgpr(1),
+                vsrc=Operand.vgpr(2),
+                rtn=True,
+                vdst=None,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -277,5 +277,65 @@ class TestSaluOrn2SaveexecB64ScalarInterpreter(unittest.TestCase):
         self.assertEqual(state.scc, 1)
 
 
+
+
+class Wave64SIMDState:
+    """Simulated Wave64 multi-lane divergence and active lane state tracking."""
+
+    def __init__(self, exec_mask: int = ALL_LANES_ACTIVE):
+        self.exec_mask = u64(exec_mask)
+
+    def is_lane_active(self, lane: int) -> bool:
+        if not (0 <= lane < 64):
+            raise IndexError(f"Lane {lane} out of range [0, 63]")
+        return bool((self.exec_mask >> lane) & 1)
+
+    def active_lanes_mask(self) -> int:
+        return self.exec_mask
+
+    def execute(self, inst: ASTInstruction, scalar_state: ScalarRegisterState) -> None:
+        scalar_state.exec_mask = self.exec_mask
+        scalar_state.execute(inst)
+        self.exec_mask = scalar_state.exec_mask
+
+
+class TestSaluOrn2SaveexecB64SIMDDivergence(unittest.TestCase):
+    """Test suite for SIMD multi-lane divergence, lane activation, and translator verification."""
+
+    def test_inactive_lanes_turn_active_under_orn2(self):
+        # Under s_orn2_saveexec_b64, a lane that was inactive in old EXEC (0) has ~EXEC = 1,
+        # so it becomes active in new EXEC regardless of ssrc0!
+        initial_exec = 0x00000000FFFFFFFF  # lanes 0..31 active, lanes 32..63 inactive
+        wave = Wave64SIMDState(exec_mask=initial_exec)
+        scalar = ScalarRegisterState(exec_mask=initial_exec)
+        scalar.set_sgpr_64(8, 0x0)  # ssrc0 = 0
+
+        inst = ASTInstruction(
+            opcode=Opcode.S_ORN2_SAVEEXEC_B64,
+            dst=ASTOperand.sgpr(2, 2),
+            src0=ASTOperand.sgpr(8, 2),
+        )
+        wave.execute(inst, scalar)
+
+        # Inactive lanes 32..63 should now be active!
+        for lane in range(32, 64):
+            self.assertTrue(wave.is_lane_active(lane), f"Lane {lane} should have turned active")
+        # Lanes 0..31 had ~EXEC = 0 and s0 = 0, so they turn off
+        for lane in range(0, 32):
+            self.assertFalse(wave.is_lane_active(lane), f"Lane {lane} should have turned off")
+
+    def test_translator_ps_translate_lines(self):
+        # Exercises tools/rdna2spirv.py to verify s_orn2_saveexec_b64 produces correct SPIR-V instructions
+        lines = [
+            "s_mov_b64 s[6:7], 0x1234567887654321",
+            "s_orn2_saveexec_b64 s[4:5], s[6:7]",
+            "s_endpgm",
+        ]
+        spv = support.translate_lines("ps_salu_orn2_saveexec_hw", lines)
+        self.assertIn("OpCapability Shader", spv)
+        self.assertIn("OpBitwiseOr", spv)
+        self.assertIn("OpNot", spv)
+
+
 if __name__ == "__main__":
     unittest.main()

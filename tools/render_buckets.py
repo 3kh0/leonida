@@ -165,7 +165,7 @@ def main(argv=None) -> int:
     for p in problems:
         print("problem:", p, file=sys.stderr)
     if a.json:
-        with open(a.json, "w", encoding="utf-8") as f:
+        with open(a.json, "w", encoding="utf-8", newline="\n") as f:
             json.dump({"archives": {k: plain(v) for k, v in per.items()}, "total": plain(overall),
                        "problems": problems}, f, indent=1)
         print("wrote", a.json)

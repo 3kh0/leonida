@@ -93,11 +93,16 @@ def doc_notes(path: str, rel: str) -> list[dict]:
     return notes
 
 
+def _unlistable(error: OSError) -> None:
+    raise error
+
+
 def collect(root: str) -> list[dict]:
     notes = []
     for d in SOURCE_DIRS:
         base = os.path.join(root, d)
-        for dirpath, _dirs, files in sorted(os.walk(base)):
+        # os.walk treats a folder it cannot list as empty; the checklist must not silently lose its notes.
+        for dirpath, _dirs, files in sorted(os.walk(base, onerror=_unlistable)):
             for name in sorted(files):
                 if name.endswith(SOURCE_EXTS):
                     path = os.path.join(dirpath, name)
@@ -168,7 +173,12 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, AttributeError) as e:
             print(f"cannot read the gdk_runtime_calls report: {e}", file=sys.stderr)
             return 1
-    text = render(collect(a.root), called)
+    try:
+        notes = collect(a.root)
+    except OSError as e:
+        print(f"cannot scan {a.root}: {e}", file=sys.stderr)
+        return 1
+    text = render(notes, called)
     if a.out:
         with open(a.out, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)

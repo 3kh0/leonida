@@ -348,6 +348,10 @@ out. A file is matched by its stream id and its bank: the folder below the Opus 
 folders removed, so one Opus folder can hold several archives' exports. `--source` limits the names to one source
 label of the names CSV.
 
+Each dialogue CSV row needs a non-empty `wave` field. A missing or empty wave stops the tool with exit code 2
+and an error naming the CSV file and line, before any Ogg file is changed. Missing optional subtitle fields are
+treated as empty text.
+
 ```sh
 python -I tools/opus_tags.py <work>/assets/audio/ogg --names <temp>/awc_names.csv --dialogue <temp>/dialogue.csv
 ```

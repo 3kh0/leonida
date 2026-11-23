@@ -126,7 +126,13 @@ def load_dialogue(path):
     with open(path, encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
         langs = [f[5:] for f in reader.fieldnames or [] if f.startswith("text_")]
-        return {row["wave"].lower(): row for row in reader}, langs
+        out = {}
+        for row in reader:
+            wave = row.get("wave")
+            if not wave:
+                raise ValueError(f"{path}: line {reader.line_num}: missing dialogue wave")
+            out[wave.lower()] = row
+        return out, langs
 
 
 def comments(name, line, langs):

@@ -181,6 +181,30 @@ class TestFolder(unittest.TestCase):
         self.assertEqual(before[list(T.pages(before))[2][0]:], after[list(T.pages(after))[2][0]:])
         self.assertTrue(crc_ok(after))
 
+    def test_cli_rejects_missing_dialogue_wave_before_tagging(self):
+        originals = {path: path.read_bytes() for path in Path(self.opus).rglob("*.ogg")}
+        for row in (["ZED", "Move."], ["ZED", "Move.", ""]):
+            with self.subTest(row=row):
+                with open(self.dialogue, "w", encoding="utf-8", newline="\n") as f:
+                    csv.writer(f, lineterminator="\n").writerows([
+                        ["speaker", "text_en", "wave"],
+                        ["ZED", "Ready.", "heistau_abcd_01"],
+                        row,
+                    ])
+                result = subprocess.run(
+                    [sys.executable, "-I", TOOL, self.opus, "--names", self.names,
+                     "--source", "story", "--dialogue", self.dialogue],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn(self.dialogue, result.stderr)
+                self.assertIn("line 3", result.stderr)
+                self.assertIn("wave", result.stderr)
+                self.assertEqual(len(result.stderr.strip().splitlines()), 1)
+                self.assertNotIn("Traceback", result.stderr)
+                for path, original in originals.items():
+                    self.assertEqual(path.read_bytes(), original, str(path))
+
     def test_duplicate_id_stream_gets_the_same_tags(self):
         # awc_opus.py names a bank's second stream with an id already used <id>~2 (export_stems); it has the same
         # id, so it is the same name and dialogue line.

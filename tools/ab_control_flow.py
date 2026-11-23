@@ -22,6 +22,7 @@ import argparse
 import collections
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -234,6 +235,8 @@ def main(argv=None):
         print("ERROR: no shader candidates for the control-flow comparison", file=sys.stderr)
         return 1
     new = os.path.join(a.out, "new")
+    out_existed = os.path.isdir(a.out)
+    before = set(os.listdir(a.out)) if out_existed else set()
     try:
         os.makedirs(new, exist_ok=True)
     except OSError as e:
@@ -244,6 +247,16 @@ def main(argv=None):
     try:
         vs = test_vertex_shader(a.out)
     except (OSError, subprocess.CalledProcessError) as e:
+        # Nothing this run created stays behind.
+        if not out_existed:
+            shutil.rmtree(a.out, ignore_errors=True)
+        else:
+            for entry in set(os.listdir(a.out)) - before:
+                path = os.path.join(a.out, entry)
+                if os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    os.remove(path)
         ap.error(f"cannot build the test vertex shader (needs spirv-as and spirv-val on PATH): {e}")
 
     print(f"{len(picked)} branchy pixel shaders picked ({'with loops' if a.loops == 'only' else 'loop-free'}); "

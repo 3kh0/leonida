@@ -446,7 +446,12 @@ class CliBadInputTest(unittest.TestCase):
             # and no SPIR-V tools on PATH.
             self.check_one_line(self.run_cli(tmp, shaders, out, "--names", names,
                                              path=os.path.join(tmp, "empty-path")), "spirv-as")
-
+            self.assertFalse(os.path.exists(out))     # the output folder this run made is removed again
+            # An output folder that already existed stays, with what this run put in it removed.
+            os.makedirs(out)
+            self.check_one_line(self.run_cli(tmp, shaders, out, "--names", names,
+                                             path=os.path.join(tmp, "empty-path")), "spirv-as")
+            self.assertEqual(os.listdir(out), [])
 
     def test_bad_index_shape_and_stale_names_leave_no_output(self):
         with tempfile.TemporaryDirectory() as tmp:

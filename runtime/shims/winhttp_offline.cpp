@@ -253,13 +253,14 @@ BOOL WINAPI query_headers(HINTERNET request, DWORD, LPCWSTR, LPVOID, LPDWORD, LP
     return receive_response(request, nullptr);
 }
 
-// RFC 7230 tchar grammar for HTTP header field-names (matches native WinHttpAddRequestHeaders):
-// printable ASCII 0x21..0x7E excluding HTTP token separators ()<>@,;:\"/[]?={}.
+// Header field-name characters accepted by native WinHttpAddRequestHeaders (measured across 0x01..0xFF on
+// Windows 11 winhttp.dll): printable ASCII 0x21..0x7E excluding ()<>@,;:"'/[]?={} — note that native WinHTTP
+// accepts '\' (0x5C) and rejects '\'' (0x27), differing from RFC 7230 tchar on those two bytes.
 bool is_header_name_char(wchar_t ch) {
     if (ch <= 0x20 || ch >= 0x7F) return false;
     switch (ch) {
         case L'(': case L')': case L'<': case L'>': case L'@':
-        case L',': case L';': case L':': case L'\\': case L'"':
+        case L',': case L';': case L':': case L'"': case L'\'':
         case L'/': case L'[': case L']': case L'?': case L'=':
         case L'{': case L'}':
             return false;

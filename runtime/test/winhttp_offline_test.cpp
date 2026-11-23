@@ -158,6 +158,12 @@ int main() {
         SetLastError(0);
         check(rejects(add_headers(request, L"X\u00e9: 1", static_cast<DWORD>(-1), WINHTTP_ADDREQ_FLAG_ADD)),
               "a header with a non-ASCII character in its name is rejected");
+        SetLastError(0);
+        check(rejects(add_headers(request, L"X'Y: 1", static_cast<DWORD>(-1), WINHTTP_ADDREQ_FLAG_ADD)),
+              "a header with a single quote in its name is rejected (matching host winhttp.dll)");
+        check(add_headers(request, L"X\\Y: 1", static_cast<DWORD>(-1), WINHTTP_ADDREQ_FLAG_ADD) != FALSE &&
+                  add_headers(request, L"\\X: 1", static_cast<DWORD>(-1), WINHTTP_ADDREQ_FLAG_ADD) != FALSE,
+              "a header with a backslash in its name is accepted (matching host winhttp.dll)");
         check(add_headers(request, L"\r\n", static_cast<DWORD>(-1), WINHTTP_ADDREQ_FLAG_ADD) != FALSE &&
                   add_headers(request, L"\r\n\r\n", static_cast<DWORD>(-1), WINHTTP_ADDREQ_FLAG_ADD) != FALSE,
               "blank-lines-only header blocks are accepted (matching host winhttp.dll)");

@@ -213,8 +213,19 @@ python3 -I make_game.py --runtime-build ~/Downloads/runtime-windows
 ```
 
 Either way it copies `gta6rt.exe` and `gta6rt_tls_host.dll` into `--out` and writes `gta6rt.sh` next to them, which
-starts `gta6rt.exe` with `wine`, or with the Wine named by `WINE` (for Proton, its `files/bin/wine`). The same option
-skips the build on Windows.
+starts `gta6rt.exe` with `wine` or the command named by `WINE`. `--runtime-build` also skips the build on Windows.
+
+To use Proton outside Steam, install umu-launcher and put `--proton` before the loader arguments.
+[umu-launcher installation](https://github.com/Open-Wine-Components/umu-launcher#installation)
+
+```sh
+cd "/path/to/package"
+"/path/to/port/gta6rt.sh" --proton --dry-run ./game_scarlett_master.exe
+```
+
+The launcher uses a prefix at `<out>/.proton-prefix` by default. Set `LEONIDA_PROTON_PREFIX` to choose a different
+Proton prefix, or `PROTONPATH` to choose a Proton build. On the first launch, `umu-run` may download Proton and its
+Steam Runtime.
 
 ## How it works
 

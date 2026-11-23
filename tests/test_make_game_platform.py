@@ -242,6 +242,36 @@ class RuntimePackagingTest(unittest.TestCase):
                 self.assertIn("is missing", log.call_args.args[0])
                 self.assertNotIn("--dry-run", log.call_args.args[0])
 
+    @unittest.skipIf(os.name == "nt", "requires a POSIX launcher")
+    def test_proton_launcher_passes_arguments_and_uses_the_requested_prefix(self):
+        self.write_artifact("gta6rt_tls_host.dll", b"TLS host")
+        out = os.path.realpath(os.path.join(self.root, "Port Files"))
+        with mock.patch.object(make_game, "log"):
+            make_game.runtime(self.game, out, {"expected_exe": "guest.exe"}, self.build)
+
+        proton_runner = os.path.join(self.root, "umu-run")
+        with open(proton_runner, "w", encoding="utf-8", newline="\n") as f:
+            f.write('#!/bin/sh\nprintf \'%s\\n\' "$WINEPREFIX" "$PWD" "$@"\nexit 23\n')
+        os.chmod(proton_runner, 0o755)
+        env = {**os.environ, "PATH": os.pathsep.join((self.root, os.defpath)), "WINE": "unused-wine-runner",
+               "WINEPREFIX": os.path.join(self.root, "Wine Prefix")}
+        env.pop("LEONIDA_PROTON_PREFIX", None)
+        launcher = os.path.join(out, "gta6rt.sh")
+        args = ["--run", "./Guest With Spaces.exe", "--", "sample argument"]
+        for prefix in (None, os.path.join(self.root, "Custom Prefix")):
+            with self.subTest(prefix=prefix):
+                if prefix is not None:
+                    env["LEONIDA_PROTON_PREFIX"] = prefix
+                result = subprocess.run([launcher, "--proton", *args], cwd=self.game, env=env,
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 23, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [
+                    prefix or os.path.join(out, ".proton-prefix"),
+                    os.path.realpath(self.game),
+                    os.path.join(out, "gta6rt.exe"),
+                    *args,
+                ])
+
     def package(self):
         with mock.patch.object(make_game.os, "name", "nt"), \
                 mock.patch.object(make_game, "ROOT", self.root), \

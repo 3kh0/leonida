@@ -21,7 +21,7 @@ Stages, in order (each skips work that is already done, so a stopped build conti
     assets    models (OBJ), texture dictionaries and texture pools (DDS), audio banks (AWC; --wav adds PCM WAV)
               BCPack uses strict decoding by default. For local calibration use <work>/bcpack-calibration.json.
     runtime   build the loader (needs the game's executable to run, not to build). On Linux it is cross-built with
-              clang-cl and an xwin SDK (docs/testing.md) and gta6rt.sh starts it with Wine; --runtime-build DIR
+              clang-cl and an xwin SDK (docs/testing.md) and gta6rt.sh starts it with Wine or Proton; --runtime-build DIR
               takes a Windows build of runtime/ instead (the runtime-windows artifact of the Runtime workflow)
     pipelines create every translated shader on your GPU's driver as a pipeline, report anything the driver
               rejects or that has to be skipped, and save the pipeline cache next to the port (the runtime doesn't
@@ -1570,8 +1570,15 @@ def decode_xma(ff: str, xma_dir: str, jobs: int = 1) -> None:
 
 # ---------------------------------------------------------------- runtime
 WINE_LAUNCHER = """#!/bin/sh
-# Starts the Windows build of the loader with Wine. WINE picks another one, e.g. a Proton build's bin/wine.
 here=$(dirname "$(readlink -f "$0")")
+if [ "${1:-}" = --proton ]; then
+    shift
+    if ! command -v umu-run >/dev/null 2>&1; then
+        printf '%s\\n' 'gta6rt.sh: --proton requires umu-run from umu-launcher.' >&2
+        exit 127
+    fi
+    WINEPREFIX="${LEONIDA_PROTON_PREFIX:-$here/.proton-prefix}" exec umu-run "$here/gta6rt.exe" "$@"
+fi
 exec "${WINE:-wine}" "$here/gta6rt.exe" "$@"
 """
 

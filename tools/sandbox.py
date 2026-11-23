@@ -54,6 +54,10 @@ def pick_pair(shaders_dir):
             index = json.load(f)
     except (OSError, ValueError):
         return None
+    if not isinstance(index, dict):
+        # A well-formed JSON that is not an object (list/string/null/number) used to reach sorted(index)
+        # and index[name] below and raise TypeError. Degrade to no pair like a missing/unreadable index.
+        return None
     ptr8 = {"kind": "ptr32_lo", "sgpr": 8}
     vs = ps = None
     for name in sorted(index):

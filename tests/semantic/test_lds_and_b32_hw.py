@@ -637,5 +637,68 @@ class TestDSAndB32ConditionCodes(unittest.TestCase):
         self.assertEqual(self.flags.vcc, 0xFFFFFFFF_FFFFFFFF)
 
 
+class TestDSAndB32BoundaryExtremes(unittest.TestCase):
+    """Commit 7: IEEE 754 boundary extremes, subnormals, and NaN handling."""
+
+    def setUp(self) -> None:
+        self.lds = LDSMemory(num_dwords=1024)
+        self.state = ScalarThreadState(self.lds)
+        self.interp = ScalarDSInterpreter()
+
+    def test_ieee754_abs_clearing_sign_bit(self) -> None:
+        neg_one_raw = struct.unpack("<I", struct.pack("<f", -1.0))[0]  # 0xBF800000
+        pos_one_raw = struct.unpack("<I", struct.pack("<f", 1.0))[0]   # 0x3F800000
+        self.lds.write_dword(0x40, neg_one_raw)
+        self.state.rf.set_vgpr(VGPR(1), 0x40)
+        self.state.rf.set_vgpr(VGPR(2), 0x7FFFFFFF)
+
+        inst = DSAndInstruction(
+            opcode=DSOpcode.DS_AND_RTN_B32,
+            vdst=VGPR(5),
+            vaddr=VGPR(1),
+            vdata=VGPR(2),
+        )
+        old, new = self.interp.execute(self.state, inst)
+        self.assertEqual(old, neg_one_raw)
+        self.assertEqual(new, pos_one_raw)
+
+    def test_ieee754_exponent_extraction(self) -> None:
+        pi_raw = struct.unpack("<I", struct.pack("<f", 3.1415927))[0]
+        self.lds.write_dword(0x40, pi_raw)
+        self.state.rf.set_vgpr(VGPR(1), 0x40)
+        self.state.rf.set_vgpr(VGPR(2), 0x7F800000)
+
+        inst = DSAndInstruction(opcode=DSOpcode.DS_AND_B32, vaddr=VGPR(1), vdata=VGPR(2))
+        old, new = self.interp.execute(self.state, inst)
+        self.assertEqual(new, pi_raw & 0x7F800000)
+
+    def test_ieee754_mantissa_extraction(self) -> None:
+        val_raw = struct.unpack("<I", struct.pack("<f", 123.456))[0]
+        self.lds.write_dword(0x40, val_raw)
+        self.state.rf.set_vgpr(VGPR(1), 0x40)
+        self.state.rf.set_vgpr(VGPR(2), 0x007FFFFF)
+
+        inst = DSAndInstruction(opcode=DSOpcode.DS_AND_B32, vaddr=VGPR(1), vdata=VGPR(2))
+        old, new = self.interp.execute(self.state, inst)
+        self.assertEqual(new, val_raw & 0x007FFFFF)
+
+    def test_ieee754_special_float_patterns(self) -> None:
+        patterns = {
+            "pos_zero": 0x00000000,
+            "neg_zero": 0x80000000,
+            "pos_inf": 0x7F800000,
+            "neg_inf": 0xFF800000,
+            "qnan": 0x7FC00000,
+            "snan": 0x7F800001,
+            "subnormal_min": 0x00000001,
+            "subnormal_max": 0x007FFFFF,
+        }
+        for name, bits in patterns.items():
+            with self.subTest(pattern=name, bits=hex(bits)):
+                self.assertEqual(ds_and_b32_oracle(bits, MASK32), bits)
+                self.assertEqual(ds_and_b32_oracle(bits, 0), 0)
+                self.assertEqual(ds_and_b32_oracle(bits, bits), bits)
+
+
 if __name__ == "__main__":
     unittest.main()

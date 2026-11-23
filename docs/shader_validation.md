@@ -831,6 +831,17 @@ encoding allows (one literal and two scalar values per VOP3). It runs one lane t
 `salu_diff.py`; a compare's mask read as VALU data (#293) is left out unless `--known`. `--oracle hw` runs the same
 programs on an AMD GPU; on an RDNA2 iGPU (gfx1036) 1,500 programs, the known form included, matched the reference. A 32-bit literal in a 16-bit source of `v_mad_u32_u16`/`v_mad_i32_i16` does not assemble, so literals there have 16 bits (zero-extended, measured).
 
+It also generates the integer `clamp` and the 64-bit shifts, from the "Integer clamp" and "Vector integer additions"
+rows of `docs/design.md` (measured on gfx1035, SHADER-137). These have not been through `--oracle hw` yet.
+- `clamp` on the e64/VOP3 form of `v_add_nc_u32`, `v_sub_nc_u32` and `v_subrev_nc_u32` saturates to
+  [0, 0xffffffff]. `v_add_nc_i32` and `v_sub_nc_i32` (VOP3 only) wrap, or saturate to [0x80000000, 0x7fffffff]
+  with `clamp`.
+- `v_lshlrev_b64`, `v_lshrrev_b64` and `v_ashrrev_i64` write a VGPR pair, odd first registers included. S1 is a
+  VGPR pair, an SGPR pair or an integer inline constant sign-extended to 64 bits. A 32-bit literal or a float inline
+  constant as S1 is not generated: how either widens to 64 bits for an integer operand is not measured.
+- These shifts read at most one scalar value (their GFX10 constant-bus limit is one, not two). With an SGPR pair as
+  S1, the shift count is a VGPR or an inline constant; the assembler rejects an SGPR or a literal there.
+
 ```
 python -I tools/vint_diff.py --programs 2000 --seed 1
 python -I tools/vint_diff.py --oracle hw --programs 500 --seed 1

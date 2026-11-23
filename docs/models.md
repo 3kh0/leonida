@@ -513,6 +513,25 @@ models (27,435 shaders):
 | 5 | no water | 6 | the same program |
 | 6 | water | 343 | water/river/pool/canal 80.2% |
 
+Over the whole export (`python -I tools/render_buckets.py <export dir>`, all ten `rpf9dump models` manifests:
+382,781 models, 2,328,563 materials; each archive's total matches its manifest's `Count`):
+
+| Bucket | Materials | In unique models | Bit 7 set | Distinct shader hashes |
+|---:|---:|---:|---:|---:|
+| 0 | 1,441,049 | 1,421,969 | 24,522 | 201 |
+| 1 | 44,166 | 44,165 | 348 | 49 |
+| 2 | 715,386 | 715,384 | 1,442 | 59 |
+| 3 | 107,699 | 107,698 | 9,305 | 93 |
+| 4 | 184 | 184 | 0 | 1 |
+| 5 | 179 | 179 | 0 | 1 |
+| 6 | 19,900 | 19,900 | 0 | 3 |
+
+No material has a value outside 0-6. Bit 7 is set on 35,617 materials (1.5%), only ever on buckets 0-3. Buckets
+4 and 5 each use one shader, `fc34f08b`, as in the sample, and water uses three. A unique model is a model name
+with its vertex and triangle counts and the ordered (shader, bucket) list of its materials, so a model repeated
+across dictionaries or archives counts once (363,698 unique models). The mask rule above stays sample-only: this
+export's manifests have no `RenderBucketMask` field.
+
 Names are per model and a building holds glass, decal and opaque shaders alike, so the token shares are low
 in absolute terms; the enrichment against bucket 0 is the signal. For export: bucket 1 needs blending, 2 is
 a projected decal, 3 needs alpha testing, 6 is a water surface.

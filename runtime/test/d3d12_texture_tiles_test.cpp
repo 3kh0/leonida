@@ -273,14 +273,15 @@ bool run(ID3D12Device& device, UINT width, UINT height, UINT64 tile_copy_offset,
             return false;
         }
     }
-    // AMD's D3D12 COPY queue can read the tiled texture as if the DIRECT queue's mappings had not happened, the fence
-    // handoff notwithstanding: every texel 0xffffffff on a Radeon 610M (AMD 26.11.2, 24 of 25 runs; one matched),
-    // every texel 0 on an RX 9070 XT (3 of 40 runs). When every COPY-queue texel of a native run is one of those
-    // values and every DIRECT-queue read (initially unbound, remap) is right, report it and leave that run out of
-    // the comparison (the case is there for the layer's cross-family handoff, which is checked against the texels).
+    // AMD's D3D12 COPY queue can read parts of the tiled texture as if the DIRECT queue's mappings had not happened,
+    // the fence handoff notwithstanding. Measured: every texel 0xffffffff on a Radeon 610M (AMD 26.11.2, 24 of 25
+    // runs; one matched); every texel 0 on an RX 9070 XT (3 of 40 runs); 75 to 97 percent of the texels 0 on an
+    // RX 9060 XT (AMD 26.10.44, 8 of 8 runs). When every COPY-queue texel of a native run is either the expected
+    // one or one such "unmapped" value (0 or 0xffffffff, at least one texel of it), and every DIRECT-queue read
+    // (initially unbound, remap) is right, report it and leave that run out of the comparison (the case is there
+    // for the layer's cross-family handoff, which is checked against the texels).
     if (!layer && separate_copy_queue) {
-        UINT copy_reads = 0, copy_uniform = 0, direct_reads = 0, direct_right = 0;
-        const auto first_copy_value = read_pixel(image_bytes + tile_copy_offset + tile_bytes);  // tile 1 reads tile 0
+        UINT copy_reads = 0, copy_expected = 0, copy_zero = 0, copy_ones = 0, direct_reads = 0, direct_right = 0;
         for (UINT tile = 0; tile < tiles; ++tile) {
             const UINT first_y = (tile / 2) * tile_height, first_x = (tile % 2) * tile_width;
             const UINT rows = std::min(tile_height, height - first_y), columns = std::min(tile_width, width - first_x);
@@ -293,16 +294,22 @@ bool run(ID3D12Device& device, UINT width, UINT height, UINT64 tile_copy_offset,
                     if (((tile ^ 1) % 2) * tile_width + x >= width) continue;
                     const auto row_major = row_major_offset +
                                            ((first_y + y) * full_width + first_x + x) * sizeof(std::uint32_t);
-                    copy_reads += 2;
-                    copy_uniform += (read_pixel(image_bytes + tiled) == first_copy_value) +
-                                    (read_pixel(row_major) == first_copy_value);
+                    const auto aliased = pixel(tile ^ 1, x, y);
+                    for (const auto value : {read_pixel(image_bytes + tiled), read_pixel(row_major)}) {
+                        ++copy_reads;
+                        copy_expected += value == aliased;
+                        copy_zero += value == 0;
+                        copy_ones += value == 0xffffffffu;
+                    }
                 }
         }
-        if ((first_copy_value == 0 || first_copy_value == 0xffffffffu) && copy_reads && copy_uniform == copy_reads &&
-            direct_right == direct_reads) {
-            std::printf("Native D3D12 COPY queue read all %u tiled texels as %#x after the DIRECT queue's mappings, "
-                        "its %u DIRECT-queue reads right (a host difference, reported; the layer is checked against "
-                        "the texels)\n", copy_reads, first_copy_value, direct_reads);
+        const UINT unmapped = copy_zero ? copy_zero : copy_ones;
+        if (direct_right == direct_reads && unmapped && !(copy_zero && copy_ones) &&
+            copy_expected + unmapped == copy_reads) {
+            std::printf("Native D3D12 COPY queue read %u of %u tiled texels as %#x after the DIRECT queue's mappings, "
+                        "the rest as written, its %u DIRECT-queue reads right (a host difference, reported; the layer "
+                        "is checked against the texels)\n", unmapped, copy_reads, copy_zero ? 0u : 0xffffffffu,
+                        direct_reads);
             readback->Unmap(0, &empty);
             if (native_host_difference) *native_host_difference = true;
             return true;

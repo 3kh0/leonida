@@ -2361,11 +2361,13 @@ The trace will enumerate them.
     XT and RX 9070 XT on AMD 26.11.2) runs `CopyTiles` at a linear offset that is not a multiple of 4 from the offset
     rounded down, so every texel lands `offset % 4` bytes early, and NVIDIA's D3D12 does not. The test's tile-order
     readbacks shift back and hide it; its row-major copy shows it. In the COPY-to-DIRECT case, AMD's COPY queue can
-    read the tiled texture as if the DIRECT queue's mappings had not happened, despite the fence handoff: every texel
-    0xffffffff on the 610M (24 of 25 runs, one matched), every texel 0 on the RX 9070 XT (3 of 40 runs). The RX 7800
-    XT matched. The test checks the layer against the texels themselves in every case. A native run is reported and
-    left out of the comparison when every row-major texel matches the rounded-down offset, or when every COPY-queue
-    texel is 0 or 0xffffffff while its DIRECT-queue reads are right. Any other native mismatch still fails.
+    read parts of the tiled texture as if the DIRECT queue's mappings had not happened, despite the fence handoff:
+    every texel 0xffffffff on the 610M (24 of 25 runs, one matched), every texel 0 on the RX 9070 XT (3 of 40 runs),
+    75 to 97 percent of the texels 0 on an RX 9060 XT (AMD 26.10.44, 8 of 8 runs). The RX 7800 XT matched. The test
+    checks the layer against the texels themselves in every case. A native run is reported and left out of the
+    comparison when every row-major texel matches the rounded-down offset, or when every COPY-queue texel is either
+    the expected one or one unmapped value (0 or 0xffffffff) while every DIRECT-queue read is right. Any other native
+    mismatch still fails.
 - `D3D12_RESOURCE_DESC::Layout`: the public `ROW_MAJOR` and `64KB_STANDARD_SWIZZLE` values plus the Xbox `0x101`
   tiled value from slot 76. Row-major textures need `VK_IMAGE_TILING_LINEAR` (not usable for RT/DS) or a staging
   copy; `64KB_STANDARD_SWIZZLE` and `0x101` have no direct Vulkan equivalent. If the game uploads console-tiled data,

@@ -5,10 +5,53 @@
 
 #include <cassert>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <new>
 #include <random>
 #include <thread>
 #include <vector>
+
+namespace {
+
+static std::size_t g_fail_alloc_at = 0;  // 0 = disabled; N = throw std::bad_alloc on Nth allocation
+static std::size_t g_alloc_attempts = 0;
+
+struct AllocFailScope {
+    explicit AllocFailScope(std::size_t fail_at) {
+        g_alloc_attempts = 0;
+        g_fail_alloc_at = fail_at;
+    }
+    ~AllocFailScope() { g_fail_alloc_at = 0; }
+    AllocFailScope(const AllocFailScope&) = delete;
+    AllocFailScope& operator=(const AllocFailScope&) = delete;
+};
+
+}  // namespace
+
+void* operator new(std::size_t size) {
+    if (g_fail_alloc_at > 0) {
+        ++g_alloc_attempts;
+        if (g_alloc_attempts == g_fail_alloc_at) throw std::bad_alloc();
+    }
+    if (void* p = std::malloc(size ? size : 1)) return p;
+    throw std::bad_alloc();
+}
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try {
+        return ::operator new(size);
+    } catch (const std::bad_alloc&) {
+        return nullptr;
+    }
+}
+void* operator new[](std::size_t size, const std::nothrow_t& nt) noexcept { return ::operator new(size, nt); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 
 #define EXPECT(condition) do { \
     if (!(condition)) { \
@@ -710,7 +753,203 @@ int test_multihop_relocation_fits_without_growth() {
     return 0;
 }
 
+static std::size_t count_occupied_slots(const std::vector<std::uint32_t>& gpu_buf) {
+    const std::size_t cap = (gpu_buf.size() - 1) / 10;
+    std::size_t count = 0;
+    for (std::size_t s = 0; s < cap; ++s) {
+        if (gpu_buf[1 + s * 10 + 9] == kSlotOccupiedMarker) ++count;
+    }
+    return count;
+}
+
+template <typename Setup, typename Op, typename CheckOk>
+int verify_oom_safety(std::size_t initial_cap, Setup&& setup, Op&& op, CheckOk&& check_ok) {
+    for (std::size_t fail_at = 1;; ++fail_at) {
+        EXPECT(fail_at <= 64);
+        DescriptorTable table(initial_cap);
+        EXPECT(setup(table) == 0);
+        table.take_changes();
+        const auto before_buf = table.build_gpu_buffer();
+        const std::size_t before_size = table.size();
+        const std::size_t before_cap = table.capacity();
+
+        bool threw = false;
+        try {
+            AllocFailScope scope(fail_at);
+            EXPECT(op(table) == 0);
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        if (threw) {
+            EXPECT(table.size() == before_size);
+            EXPECT(table.capacity() == before_cap);
+            const auto after_buf = table.build_gpu_buffer();
+            EXPECT(after_buf == before_buf);
+            EXPECT(count_occupied_slots(after_buf) == before_size);
+            const auto ch = table.take_changes();
+            EXPECT(!ch.all && ch.slots.empty());
+            continue;
+        }
+
+        EXPECT(fail_at >= 2);
+        EXPECT(count_occupied_slots(table.build_gpu_buffer()) == table.size());
+        return check_ok(table, before_buf);
+    }
+}
+
+int test_allocation_failure_preserves_table_and_changes() {
+    auto replay_matches = [](DescriptorTable& table, std::vector<std::uint32_t> gpu,
+                             std::size_t min_slots) -> int {
+        const auto ch = table.take_changes();
+        EXPECT(!ch.all && ch.slots.size() >= min_slots);
+        for (const std::uint32_t s : ch.slots) EXPECT(table.read_slot(s, &gpu[1 + std::size_t(s) * 10]));
+        EXPECT(gpu == table.build_gpu_buffer());
+        return 0;
+    };
+
+    // 1. Replace an existing key's index after take_changes().
+    {
+        const DescriptorKey k1 = make_key_with_hash(101u, 1u);
+        EXPECT(verify_oom_safety(
+                   64,
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.insert(k1, 1));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.insert_or_update(k1.data(), 2) == DescriptorTable::InsertResult::replaced);
+                       return 0;
+                   },
+                   [&](DescriptorTable& t, const std::vector<std::uint32_t>& before) -> int {
+                       EXPECT(replay_matches(t, before, 1) == 0);
+                       EXPECT(t.size() == 1 && t.lookup(k1) == 2);
+                       EXPECT(t.erase(k1) && !t.contains(k1) && t.size() == 0);
+                       return 0;
+                   }) == 0);
+    }
+
+    // 2. Direct insert without relocation after take_changes().
+    {
+        const DescriptorKey k1 = make_key_with_hash(201u, 1u), k2 = make_key_with_hash(202u, 20u);
+        EXPECT(verify_oom_safety(
+                   64,
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.insert(k1, 10));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.insert(k2, 20));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t, const std::vector<std::uint32_t>& before) -> int {
+                       EXPECT(replay_matches(t, before, 1) == 0);
+                       EXPECT(t.size() == 2 && t.lookup(k1) == 10 && t.lookup(k2) == 20);
+                       EXPECT(t.erase(k2) && !t.contains(k2) && t.size() == 1);
+                       return 0;
+                   }) == 0);
+    }
+
+    // 3. 1-hop relocation (full hashes 0..7 occupied, 9th key at hash 0).
+    {
+        std::vector<std::pair<DescriptorKey, std::uint32_t>> existing;
+        for (std::uint32_t h = 0; h < 8; ++h) existing.push_back({make_key_with_hash(h + 1u, h), h + 1u});
+        const DescriptorKey incoming = make_key_with_hash(99u, 0u);
+        EXPECT(verify_oom_safety(
+                   64,
+                   [&](DescriptorTable& t) -> int {
+                       for (const auto& [k, v] : existing) EXPECT(t.insert(k, v));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.insert(incoming, 99u));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t, const std::vector<std::uint32_t>& before) -> int {
+                       EXPECT(replay_matches(t, before, 2) == 0);
+                       EXPECT(t.size() == 9 && t.capacity() == 64 && t.lookup(incoming) == 99u);
+                       for (const auto& [k, v] : existing) EXPECT(t.lookup(k) == v);
+                       EXPECT(t.erase(incoming) && !t.contains(incoming) && t.size() == 8);
+                       for (const auto& [k, v] : existing) EXPECT(t.lookup(k) == v);
+                       return 0;
+                   }) == 0);
+    }
+
+    // 4. 2-hop relocation at capacity 32.
+    {
+        std::vector<std::pair<DescriptorKey, std::uint32_t>> existing;
+        std::uint32_t id = 1;
+        existing.push_back({make_key_with_hash(id++, 0u), 10u});
+        for (int i = 0; i < 7; ++i) existing.push_back({make_key_with_hash(id++, 1u), 100u + i});
+        for (int i = 0; i < 7; ++i) existing.push_back({make_key_with_hash(id++, 8u), 200u + i});
+        const DescriptorKey incoming = make_key_with_hash(id++, 0u);
+        EXPECT(verify_oom_safety(
+                   32,
+                   [&](DescriptorTable& t) -> int {
+                       for (const auto& [k, v] : existing) EXPECT(t.insert(k, v));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.insert(incoming, 300u));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t, const std::vector<std::uint32_t>& before) -> int {
+                       EXPECT(replay_matches(t, before, 3) == 0);
+                       EXPECT(t.size() == 16 && t.capacity() == 32 && t.lookup(incoming) == 300u);
+                       for (const auto& [k, v] : existing) EXPECT(t.lookup(k) == v);
+                       EXPECT(t.erase(incoming) && !t.contains(incoming) && t.size() == 15);
+                       for (const auto& [k, v] : existing) EXPECT(t.lookup(k) == v);
+                       return 0;
+                   }) == 0);
+    }
+
+    // 5. Erase after take_changes().
+    {
+        const DescriptorKey k1 = make_key_with_hash(301u, 1u), k2 = make_key_with_hash(302u, 20u);
+        EXPECT(verify_oom_safety(
+                   64,
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.insert(k1, 1) && t.insert(k2, 2));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.erase(k1));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t, const std::vector<std::uint32_t>& before) -> int {
+                       EXPECT(replay_matches(t, before, 1) == 0);
+                       EXPECT(t.size() == 1 && !t.contains(k1) && t.lookup(k2) == 2);
+                       return 0;
+                   }) == 0);
+    }
+
+    // 6. Growth from capacity 16 (50% load) after take_changes().
+    {
+        std::vector<std::pair<DescriptorKey, std::uint32_t>> existing;
+        for (std::uint32_t h = 0; h < 8; ++h) existing.push_back({make_key_with_hash(h + 1u, h), 10u + h});
+        const DescriptorKey incoming = make_key_with_hash(99u, 8u);
+        EXPECT(verify_oom_safety(
+                   16,
+                   [&](DescriptorTable& t) -> int {
+                       for (const auto& [k, v] : existing) EXPECT(t.insert(k, v));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t) -> int {
+                       EXPECT(t.insert(incoming, 99u));
+                       return 0;
+                   },
+                   [&](DescriptorTable& t, const std::vector<std::uint32_t>&) -> int {
+                       const auto ch = t.take_changes();
+                       EXPECT(ch.all && ch.slots.empty());
+                       EXPECT(t.size() == 9 && t.capacity() == 32 && t.lookup(incoming) == 99u);
+                       for (const auto& [k, v] : existing) EXPECT(t.lookup(k) == v);
+                       return 0;
+                   }) == 0);
+    }
+    return 0;
+}
+
 int main() {
+    EXPECT(test_allocation_failure_preserves_table_and_changes() == 0);
     EXPECT(test_unresolvable_collision_at_half_load_does_not_grow() == 0);
     EXPECT(test_all_changed_suppresses_redundant_slot_list() == 0);
     EXPECT(test_unresolvable_adjacent_hash_cluster_rejected_without_growth() == 0);

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -245,22 +246,28 @@ public:
     }
 
 private:
+    void reserve_changes_locked(std::size_t extra) {
+        if (all_changed_ || extra == 0) return;
+        if (extra > changed_slots_.max_size() - changed_slots_.size()) throw std::bad_alloc();
+        changed_slots_.reserve(changed_slots_.size() + extra);
+    }
+
     void mark(std::uint32_t slot) {
         if (!all_changed_) changed_slots_.push_back(slot);
     }
 
     // All eight slots for the incoming key are occupied. Find the first empty slot past the probe window and walk it
-    // back in hops <= kDescriptorProbes - 1 until it lands in [hash, hash + 7], moving residents within their own
-    // probe windows. Moves are recorded before mutating `entries`, so a failed search leaves `entries` untouched.
-    static int make_probe_slot(std::vector<DescriptorEntry>& entries, std::uint32_t hash,
-                               std::vector<std::uint32_t>* moved_slots = nullptr) {
+    // back in hops <= kDescriptorProbes - 1 until it lands in [hash, hash + 7], recording moves without mutating
+    // `entries`. Returns the vacated slot index in [hash, hash + 7], or -1 (clearing `moves`) if unreachable.
+    static int plan_probe_slot(const std::vector<DescriptorEntry>& entries, std::uint32_t hash,
+                               std::vector<std::pair<std::uint32_t, std::uint32_t>>& moves) {
+        moves.clear();
         const auto cap = static_cast<std::uint32_t>(entries.size());
         const auto mask = cap - 1;
         std::uint32_t dist = kDescriptorProbes;
         while (dist < cap && entries[(hash + dist) & mask].pad == kSlotOccupiedMarker) ++dist;
         if (dist >= cap) return -1;
 
-        std::vector<std::pair<std::uint32_t, std::uint32_t>> moves;
         std::uint32_t hole_dist = dist;
         while (hole_dist >= kDescriptorProbes) {
             const std::uint32_t hole = (hash + hole_dist) & mask;
@@ -276,12 +283,10 @@ private:
                     break;
                 }
             }
-            if (!moved) return -1;
-        }
-
-        for (const auto& [src, dst] : moves) {
-            entries[dst] = entries[src];
-            if (moved_slots) moved_slots->push_back(dst);
+            if (!moved) {
+                moves.clear();
+                return -1;
+            }
         }
         return static_cast<int>((hash + hole_dist) & mask);
     }
@@ -340,6 +345,7 @@ private:
                 if (entry.pad == kSlotOccupiedMarker) {
                     if (std::memcmp(entry.key, key, sizeof(entry.key)) == 0) {
                         if (entry.index == index) return InsertResult::unchanged;
+                        reserve_changes_locked(1);
                         entry.index = index;
                         mark(slot);
                         return InsertResult::replaced;
@@ -359,17 +365,20 @@ private:
             }
 
             const bool relocate = empty_slot < 0;
-            std::vector<std::uint32_t> moved_slots;
-            if (relocate) empty_slot = make_probe_slot(entries_, h, &moved_slots);
+            std::vector<std::pair<std::uint32_t, std::uint32_t>> moves;
+            if (relocate) empty_slot = plan_probe_slot(entries_, h, moves);
             if (empty_slot >= 0) {
+                reserve_changes_locked(moves.size() + 1);
+                // Commit moves, insertion, occupancy count, and change tracking together after all allocations succeed.
+                for (const auto& [src, dst] : moves) {
+                    entries_[dst] = entries_[src];
+                    mark(dst);
+                }
                 auto& entry = entries_[empty_slot];
                 std::memcpy(entry.key, key, sizeof(entry.key));
                 entry.index = index;
                 entry.pad = kSlotOccupiedMarker;
                 ++occupied_count_;
-                if (relocate) {
-                    for (const std::uint32_t s : moved_slots) mark(s);
-                }
                 mark(std::uint32_t(empty_slot));
                 return relocate ? InsertResult::added_with_relocation : InsertResult::added;
             }
@@ -393,16 +402,18 @@ private:
         }
         if (!found) return false;
 
+        reserve_changes_locked(1);
         // No backward shift: see erase().
         entries_[found_slot] = DescriptorEntry{};
-        mark(found_slot);
         --occupied_count_;
+        mark(found_slot);
         return true;
     }
 
     void grow_locked() {
         if (entries_.size() >= max_capacity) throw std::length_error("Descriptor table capacity exhausted");
         std::uint32_t new_cap = static_cast<std::uint32_t>(entries_.size() * 2);
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> moves;
         while (true) {
             std::vector<DescriptorEntry> new_entries(new_cap);
             const std::uint32_t new_mask = new_cap - 1;
@@ -419,7 +430,12 @@ private:
                         break;
                     }
                 }
-                if (slot < 0) slot = make_probe_slot(new_entries, h);
+                if (slot < 0) {
+                    slot = plan_probe_slot(new_entries, h, moves);
+                    if (slot >= 0) {
+                        for (const auto& [src, dst] : moves) new_entries[dst] = new_entries[src];
+                    }
+                }
                 if (slot < 0) {
                     rehash_ok = false;
                     break;

@@ -173,5 +173,88 @@ class TestAbsdiffASTAndTypes(unittest.TestCase):
         self.assertEqual(words[0], 60)
 
 
+class ScalarInterpreter:
+    """Deterministic scalar instruction interpreter for SALU blocks."""
+
+    def __init__(self) -> None:
+        self.sgprs = [0] * 64
+        self.scc = 0
+
+    def exec_line(self, line: str) -> None:
+        tokens = line.strip().replace(",", " ").split()
+        if not tokens:
+            return
+        op = tokens[0]
+        if op == "s_mov_b32":
+            dst = int(tokens[1].lstrip("s"))
+            val = int(tokens[2], 0)
+            self.sgprs[dst] = val & MASK32
+        elif op == "s_absdiff_i32":
+            dst = int(tokens[1].lstrip("s"))
+            src0 = self.resolve_src(tokens[2])
+            src1 = self.resolve_src(tokens[3])
+            val, scc = s_absdiff_i32_oracle(src0, src1)
+            self.sgprs[dst] = val
+            self.scc = scc
+
+    def resolve_src(self, tok: str) -> int:
+        if tok.startswith("s"):
+            return self.sgprs[int(tok.lstrip("s"))]
+        return int(tok, 0) & MASK32
+
+
+class TestAbsdiffScalarInterpreter(unittest.TestCase):
+    """Commit 3: deterministic scalar instruction interpreter for s_absdiff_i32."""
+
+    def test_sequential_chained_execution(self):
+        interp = ScalarInterpreter()
+        lines = [
+            "s_mov_b32 s0, 100",
+            "s_mov_b32 s1, 60",
+            "s_absdiff_i32 s2, s0, s1",   # abs(100 - 60) = 40
+            "s_mov_b32 s3, 10",
+            "s_absdiff_i32 s4, s2, s3",   # abs(40 - 10) = 30
+        ]
+        for ln in lines:
+            interp.exec_line(ln)
+        self.assertEqual(interp.sgprs[2], 40)
+        self.assertEqual(interp.sgprs[4], 30)
+
+        prog = lines + [
+            "v_mov_b32 v0, s2",
+            "v_mov_b32 v1, s4",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+        ]
+        words = run_absdiff_ps(prog, "ps_absdiff_chained")
+        self.assertEqual(words[0], 40)
+        self.assertEqual(words[1], 30)
+
+    def test_parallel_independent_diffs(self):
+        interp = ScalarInterpreter()
+        lines = [
+            "s_mov_b32 s0, 10",
+            "s_mov_b32 s1, 35",
+            "s_mov_b32 s2, 70",
+            "s_mov_b32 s3, 20",
+            "s_absdiff_i32 s4, s0, s1",  # abs(10-35) = 25
+            "s_absdiff_i32 s5, s2, s3",  # abs(70-20) = 50
+        ]
+        for ln in lines:
+            interp.exec_line(ln)
+        self.assertEqual(interp.sgprs[4], 25)
+        self.assertEqual(interp.sgprs[5], 50)
+
+        prog = lines + [
+            "v_mov_b32 v0, s4",
+            "v_mov_b32 v1, s5",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+        ]
+        words = run_absdiff_ps(prog, "ps_absdiff_parallel")
+        self.assertEqual(words[0], 25)
+        self.assertEqual(words[1], 50)
+
+
 if __name__ == '__main__':
     unittest.main()

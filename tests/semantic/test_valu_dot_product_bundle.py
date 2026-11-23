@@ -465,5 +465,32 @@ class VDot8I32I4SimdBoundaryTests(unittest.TestCase):
         for i in range(lanes):
             self.assertEqual(out[i], 8 + i)
 
+class VDot8I32I4TranslatorIntegrationTests(unittest.TestCase):
+    """Translator execution and negative mutation controls for v_dot8_i32_i4."""
+
+    def test_spirv_translation_execution(self):
+        lines = [
+            "v_mov_b32 v0, 0x11111111",
+            "v_mov_b32 v1, 0x22222222",
+            "v_mov_b32 v2, 4",
+            "v_dot8_i32_i4 v3, v0, v1, v2",
+            "v_mov_b32 v0, v3",
+            "v_mov_b32 v1, 0",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+            "exp mrt0 v0, v1, v2, v3 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_dot8_i32_bundle_int", lines)
+        out = mrt0_words(spv)
+        self.assertEqual(out[0], 20)
+
+    def test_negative_mutation_contrast(self):
+        s0 = 0xF0000000
+        s1 = 0x10000000
+        res_i = ref_dot8_i32_i4(s0, s1, 0)
+        res_u = ref_dot8_u32_u4(s0, s1, 0)
+        self.assertNotEqual(res_i, res_u)
+
 if __name__ == "__main__":
     unittest.main()

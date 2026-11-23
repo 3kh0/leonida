@@ -101,6 +101,7 @@ def ogg_output_samples(path: str) -> int:
             pre_skip, = struct.unpack_from("<H", head, 10)
             # Walk page headers forward so same-serial chained or multiplexed streams are rejected.
             offset = f.tell()
+            last_granule = 0
             while offset < size:
                 f.seek(offset)
                 hdr = f.read(27)
@@ -116,10 +117,15 @@ def ogg_output_samples(path: str) -> int:
                 offset += 27 + nseg + sum(lacing)
                 if offset > size:
                     return 0
+                granule, = struct.unpack_from("<q", hdr, 6)
+                # RFC 7845 section 4: -1 means no completed packet, not a reset of the sample clock.
+                if granule != -1:
+                    if granule < last_granule:
+                        return 0
+                    last_granule = granule
                 if htype & 0x04:
                     if offset != size:
                         return 0
-                    granule, = struct.unpack_from("<q", hdr, 6)
                     return granule - pre_skip if granule > pre_skip else 0
             return 0
     except (OSError, struct.error):

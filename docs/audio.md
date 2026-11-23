@@ -161,7 +161,9 @@ interleaved sample count is divided by that channel count.
 
 `audio_wav.py` runs ffmpeg with `-c:a pcm_s16le` at the stream's own rate and channel count. For a single stream
 it trims to the final Ogg Opus granule minus pre-skip. Chained streams have a separate granule timeline for each
-link, so ffmpeg handles their end trimming. Existing WAVs are normally skipped on resume. If the destination
+link, so ffmpeg handles their end trimming. Streams with decreasing or invalid negative granule positions also
+leave timing to ffmpeg; the `-1` marker for a page without completed packets does not reset the sample clock.
+Existing WAVs are normally skipped on resume. If the destination
 filesystem treats two output names as the same file, the converter keeps the input extensions and adds a counter
 where needed. It leaves a previously shared WAV untouched. Before reusing a name ending in `.ogg.wav` or `.opus.wav`
 (including counters such as `.ogg~2.wav`), it decodes the source again and compares the PCM, rate and channel

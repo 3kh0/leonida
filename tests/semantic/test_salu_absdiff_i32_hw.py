@@ -347,5 +347,37 @@ class TestAbsdiffConditionCodesAndSCC(unittest.TestCase):
         self.assertEqual(words[1], 0xBBBB)
 
 
+class TestAbsdiffBoundaryAndExtremes(unittest.TestCase):
+    """Commit 7: IEEE 754 boundary extremes, subnormals, and NaN handling for s_absdiff_i32."""
+
+    def test_ieee754_bit_patterns_as_integers(self):
+        patterns = [
+            (0x00000000, 0x80000000),  # +0.0 vs -0.0 / min_i32
+            (0x3F800000, 0xBF800000),  # +1.0 vs -1.0
+            (0x00000001, 0x007FFFFF),  # subnormals
+            (0x7F800000, 0xFF800000),  # +inf vs -inf
+            (0x7FC00000, 0x7FA00000),  # qNaN vs sNaN
+            (0x7FFFFFFF, 0x80000000),  # max_i32 vs min_i32
+            (0xFFFFFFFF, 0x00000000),  # -1 vs 0
+            (0x7FFFFFFF, 0x7FFFFFFF),  # max_i32 vs max_i32
+        ]
+        for idx, (p0, p1) in enumerate(patterns):
+            with self.subTest(p0=hex(p0), p1=hex(p1)):
+                expected_val, expected_scc = s_absdiff_i32_oracle(p0, p1)
+                lines = [
+                    f"s_mov_b32 s0, {p0:#x}",
+                    f"s_mov_b32 s1, {p1:#x}",
+                    "s_absdiff_i32 s2, s0, s1",
+                    "s_cselect_b32 s3, 1, 0",
+                    "v_mov_b32 v0, s2",
+                    "v_mov_b32 v1, s3",
+                    "v_mov_b32 v2, 0",
+                    "v_mov_b32 v3, 0",
+                ]
+                words = run_absdiff_ps(lines, f"ps_absdiff_ext_{idx}")
+                self.assertEqual(words[0], expected_val)
+                self.assertEqual(words[1], expected_scc)
+
+
 if __name__ == '__main__':
     unittest.main()

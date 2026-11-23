@@ -427,6 +427,26 @@ class TestVMed3F16ReferenceOracle(unittest.TestCase):
         res = oracle_v_med3_f16(0x4200, 0x3c00, 0x4000)
         self.assertEqual(res, 0x4000)
 
+class TestVMed3F16ASTAndInterpreter(unittest.TestCase):
+    """Stage 2 for v_med3_f16: AST and deterministic scalar interpreter execution."""
+
+    def test_v_med3_f16_ast_and_execution(self):
+        lines = [
+            "v_mov_b32 v1, 0x4200",
+            "v_mov_b32 v2, 0x3c00",
+            "v_mov_b32 v3, 0x4000",
+            "v_med3_f16 v0, v1, v2, v3",
+            "v_mov_b32 v1, 0",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+            "exp mrt0 v0, v1, v2, v3 done vm",
+            "s_endpgm",
+        ]
+        spv = support.translate_lines("ps_ast_v_med3_f16", lines)
+        self.assertIn("NMin", spv)
+        words = support.mrt0_words(spv)
+        self.assertEqual(words[0] & 0xFFFF, 0x4000)
+
 
 if __name__ == '__main__':
     unittest.main()

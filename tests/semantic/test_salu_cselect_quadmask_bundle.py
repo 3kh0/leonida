@@ -276,6 +276,22 @@ class TestSQuadmaskB32EdgeCases(unittest.TestCase):
         res, _ = ref_s_quadmask_b32(0xFFFFFFFF)
         self.assertEqual(res & ~0xFF, 0)
 
+class TestSQuadmaskB32Translator(unittest.TestCase):
+    def test_translate_s_quadmask_b32(self):
+        lines = [
+            "s_mov_b32 s2, 0x01020408",
+            "s_quadmask_b32 s0, s2",
+            "s_cselect_b32 s1, 1, 0",
+            "v_mov_b32 v0, s0",
+            "v_mov_b32 v1, s1",
+            "exp mrt0 v0, v1, v0, v1 done vm",
+            "s_endpgm",
+        ]
+        spv = translate_lines("ps_qm32", lines)
+        self.assertIn("OpEntryPoint", spv)
+        words = mrt0_words(spv)
+        self.assertEqual(words, [0x55, 0x1, 0x55, 0x1])
+
 
 if __name__ == "__main__":
     unittest.main()

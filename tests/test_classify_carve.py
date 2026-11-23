@@ -312,5 +312,20 @@ class MainTests(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.root)), files)
 
 
+class PublishTests(unittest.TestCase):
+    def test_failed_replace_of_a_read_only_report_removes_the_temp(self):
+        # os.replace onto a read-only destination fails on Windows, and the staging file has the destination's
+        # read-only bit by then, so a plain unlink strands it beside the report.
+        with tempfile.TemporaryDirectory() as root:
+            report = os.path.join(root, "types.json")
+            carve.publish_report(root, report, {"overall": {}})
+            os.chmod(report, 0o444)
+            self.addCleanup(lambda: os.path.exists(report) and os.chmod(report, 0o600))
+            with mock.patch.object(carve.os, "replace", side_effect=PermissionError(13, "read-only")):
+                with self.assertRaises(OSError):
+                    carve.publish_report(root, report, {"overall": {"x": 1}})
+            self.assertEqual(sorted(os.listdir(root)), ["types.json"])
+
+
 if __name__ == "__main__":
     unittest.main()

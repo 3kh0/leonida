@@ -920,12 +920,23 @@ def main(argv=None) -> int:
         prepared_manifest = os.path.join(manifest_staging, "manifest.json")
         with open(prepared_manifest, "w", encoding="utf-8", newline="\n") as f:
             json.dump(manifest, f, indent=1)
-        # Publish the manifest only once the old reference can no longer be used.
+        preview = os.path.join(out_dir, "image.ppm")
+        previous_preview = os.path.join(manifest_staging, "image.ppm")
         try:
-            os.unlink(os.path.join(out_dir, "image.raw"))
+            os.replace(preview, previous_preview)
         except FileNotFoundError:
             pass
-        os.replace(prepared_manifest, os.path.join(out_dir, "manifest.json"))
+        # Keep the old preview recoverable until publication succeeds.
+        try:
+            try:
+                os.unlink(os.path.join(out_dir, "image.raw"))
+            except FileNotFoundError:
+                pass
+            os.replace(prepared_manifest, os.path.join(out_dir, "manifest.json"))
+        except OSError:
+            if os.path.lexists(previous_preview):
+                os.replace(previous_preview, preview)
+            raise
     print(f"{len(vertices)} vertices, {len(indices) // 3} triangles -> {out_dir}")
     if not (a.run or a.check):
         env_preview = harness_env(manifest, out_dir, base_env={})

@@ -144,13 +144,14 @@ class FirstLightTests(unittest.TestCase):
 
 
 class DrawOutputTests(unittest.TestCase):
-    def test_only_successful_prepare_invalidates_previous_readback(self) -> None:
+    def test_only_successful_prepare_invalidates_previous_draw(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             work = Path(tmp)
             out = work / "out"
             obj = work / "mesh.obj"
             manifest_path = out / "manifest.json"
             raw = out / "image.raw"
+            preview = out / "image.ppm"
             picked = [{"name": stage, "stage": stage, "file": f"{stage}.dxbc"} for stage in ("vs", "ps")]
             for directory, suffix in (("shaders/dxbc", ".dxbc"), ("first_light/spirv", ".spv")):
                 staging = work / directory
@@ -174,13 +175,17 @@ class DrawOutputTests(unittest.TestCase):
                           for y in range(4) for x in range(4)]
                 previous_raw = struct.pack("<64f", *(c for pixel in pixels for c in pixel))
                 raw.write_bytes(previous_raw)
-                previous["result"] = {"covered": check_image(previous_raw, previous)["covered"], "total": 16}
+                stats = check_image(previous_raw, previous)
+                write_ppm(str(preview), stats["pixels"], 4, 4)
+                previous_preview = preview.read_bytes()
+                previous["result"] = {"covered": stats["covered"], "total": 16}
                 manifest_path.write_text(json.dumps(previous), encoding="utf-8")
 
                 obj.write_text("v invalid 0 0\n", encoding="utf-8")
                 with self.assertRaisesRegex(SystemExit, "invalid vertex coordinates"):
                     fl.main(argv)
                 self.assertEqual(raw.read_bytes(), previous_raw)
+                self.assertEqual(preview.read_bytes(), previous_preview)
                 self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8")), previous)
 
                 obj.write_text(mesh.format(z=0.75), encoding="utf-8")
@@ -195,6 +200,7 @@ class DrawOutputTests(unittest.TestCase):
                     with self.assertRaisesRegex(PermissionError, "image.raw is locked"):
                         fl.main(argv)
                 self.assertEqual(raw.read_bytes(), previous_raw)
+                self.assertEqual(preview.read_bytes(), previous_preview)
                 self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8")), previous)
 
                 self.assertEqual(fl.main(argv), 0)
@@ -202,6 +208,7 @@ class DrawOutputTests(unittest.TestCase):
                 self.assertNotEqual(prepared["obj_sha256"], previous["obj_sha256"])
                 self.assertNotIn("result", prepared)
                 self.assertFalse(raw.exists())
+                self.assertFalse(preview.exists())
                 draw.assert_not_called()
 
     def test_failed_recheck_clears_previous_preview_and_result(self) -> None:

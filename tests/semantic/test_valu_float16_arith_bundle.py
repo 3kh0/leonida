@@ -212,6 +212,25 @@ class TestVMulF16ReferenceOracle(unittest.TestCase):
         res = oracle_v_mul_f16(0x4000, 0x3e00)
         self.assertEqual(res, 0x4200)
 
+class TestVMulF16ASTAndInterpreter(unittest.TestCase):
+    """Stage 2 for v_mul_f16: AST and deterministic scalar interpreter execution."""
+
+    def test_v_mul_f16_ast_and_execution(self):
+        lines = [
+            "v_mov_b32 v1, 0x4000",
+            "v_mov_b32 v2, 0x3e00",
+            "v_mul_f16 v0, v1, v2",
+            "v_mov_b32 v1, 0",
+            "v_mov_b32 v2, 0",
+            "v_mov_b32 v3, 0",
+            "exp mrt0 v0, v1, v2, v3 done vm",
+            "s_endpgm",
+        ]
+        spv = support.translate_lines("ps_ast_v_mul_f16", lines)
+        self.assertIn("OpFMul", spv)
+        words = support.mrt0_words(spv)
+        self.assertEqual(words[0] & 0xFFFF, 0x4200)
+
 
 if __name__ == '__main__':
     unittest.main()

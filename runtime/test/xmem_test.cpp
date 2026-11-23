@@ -475,6 +475,7 @@ void test_placeholders(const PhysicalApi& api) {
 }
 
 using HostVirtualFreeFn = BOOL(WINAPI*)(void*, SIZE_T, DWORD);
+using TitleVirtualAllocFn = void*(WINAPI*)(void*, SIZE_T, DWORD, DWORD);
 
 bool released(const void* address) {
     MEMORY_BASIC_INFORMATION info{};
@@ -550,6 +551,39 @@ void test_title_virtual_free(const PhysicalApi& api) {
     check(reserved_only(outer) && reserved_only(outer + 3 * kPage64k), "the rest of the reservation stays reserved");
     check(title_free(outer, 0, MEM_RELEASE) == TRUE && all_released(outer, 4), "and is released with its base");
     api.free_pages(1, pages);
+
+    // A hole released inside a reservation and allocated again belongs to whoever allocated it: releasing the outer
+    // reservation leaves it, whether the title's VirtualAlloc or XMemVirtualAlloc made it.
+    const auto title_alloc = reinterpret_cast<TitleVirtualAllocFn>(rt::shims::find("kernel32.dll", "VirtualAlloc"));
+    for (const bool by_xmem : {false, true}) {
+        auto* const ring = static_cast<uint8_t*>(
+            api.virtual_alloc(nullptr, 4 * kPage64k, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER, 7, PAGE_NOACCESS));
+        auto* const hole = ring ? static_cast<uint8_t*>(api.virtual_alloc(
+                                      ring + kPage64k, 2 * kPage64k,
+                                      MEM_RESERVE | MEM_REPLACE_PLACEHOLDER | kXmem64kPages, 0x27, PAGE_READWRITE))
+                                : nullptr;
+        check(hole && title_free(hole, 0, MEM_RELEASE) == TRUE, "carve a window out of a reservation and release it");
+        if (!hole || !title_alloc) return;
+        void* const again =
+            by_xmem ? api.virtual_alloc(hole, 2 * kPage64k, MEM_RESERVE | kXmem64kPages, 0x23, PAGE_READWRITE)
+                    : title_alloc(hole, 2 * kPage64k, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        check(again == hole, by_xmem ? "XMemVirtualAlloc reserves the hole again" : "VirtualAlloc takes the hole again");
+        if (!by_xmem && again) static_cast<volatile uint8_t*>(again)[0] = 0x6b;
+        check(title_free(ring, 0, MEM_RELEASE) == TRUE && released(ring) && released(ring + 3 * kPage64k),
+              "releasing the outer reservation frees its own pages");
+        check(!released(hole) && !released(hole + kPage64k), "and leaves the allocation in the hole");
+        if (by_xmem) {
+            uint64_t page = 0;
+            count = 1;
+            check(api.allocate(0x280, &count, &page) == TRUE && api.map(hole, 1, &page) == hole,
+                  "the window in the hole still takes pages");
+            api.map(hole, 1, nullptr);
+            api.free_pages(1, &page);
+        } else {
+            check(static_cast<volatile uint8_t*>(again)[0] == 0x6b, "and its contents");
+        }
+        check(title_free(hole, 0, MEM_RELEASE) == TRUE && all_released(hole, 2), "the hole's allocation releases");
+    }
 
     // Everything else is the host's.
     void* const plain = VirtualAlloc(nullptr, kPage64k, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);

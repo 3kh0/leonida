@@ -288,6 +288,25 @@ const Window* find_window(uintptr_t address, uint64_t bytes) {
     return &it->second;
 }
 
+// With g_phys_mutex held: true when `address` lies inside a recorded reservation that starts before it.
+bool inside_reservation(uintptr_t address) {
+    auto it = g_reservations.lower_bound(address);
+    if (it == g_reservations.begin()) return false;
+    --it;
+    return address - it->first < it->second;
+}
+
+// A new host reservation (`result`, asked for at `address` with `size`) that lands in a hole the title released inside
+// a recorded reservation is recorded too, so that releasing the outer reservation leaves it alone (release_range).
+void note_nested_allocation(void* result, void* address, SIZE_T size) {
+    if (!result) return;
+    const uintptr_t start = reinterpret_cast<uintptr_t>(result);
+    const uintptr_t asked = address ? reinterpret_cast<uintptr_t>(address) : start;
+    const uintptr_t end = (asked + size + 0xfff) & ~uintptr_t{0xfff};
+    const std::lock_guard lock(g_phys_mutex);
+    if (end > start && inside_reservation(start)) g_reservations[start] = static_cast<SIZE_T>(end - start);
+}
+
 // [address, address + size) as one placeholder of its own: split it out of the placeholder that holds it. Fails when
 // the range is not inside one placeholder.
 bool isolate_placeholder(void* address, SIZE_T size) {
@@ -421,10 +440,14 @@ void* WINAPI XMemVirtualAlloc(void* address, SIZE_T size, DWORD allocation_type,
         MEM_EXTENDED_PARAMETER parameter{};
         parameter.Type = MemExtendedParameterAddressRequirements;
         parameter.Pointer = &requirements;
-        return placeholder_api().virtual_alloc2(GetCurrentProcess(), nullptr, size, host_type | MEM_RESERVE, host_prot,
-                                                &parameter, 1);
+        void* const result = placeholder_api().virtual_alloc2(GetCurrentProcess(), nullptr, size,
+                                                              host_type | MEM_RESERVE, host_prot, &parameter, 1);
+        note_nested_allocation(result, nullptr, size);
+        return result;
     }
-    return VirtualAlloc(address, size, host_type, host_prot);
+    void* const result = VirtualAlloc(address, size, host_type, host_prot);
+    if (host_type & MEM_RESERVE) note_nested_allocation(result, address, size);
+    return result;
 }
 
 // With g_phys_mutex held. Unmaps the page at `address` if one is mapped there; the address becomes a placeholder again.
@@ -691,18 +714,46 @@ constexpr DWORD kMemGraphics = 0x10000000;
 constexpr DWORD kMemTitle = 0x40000000;
 
 LPVOID WINAPI TitleVirtualAlloc(LPVOID address, SIZE_T size, DWORD allocation_type, DWORD protect) {
-    return VirtualAlloc(address, size, allocation_type & ~(kMemGraphics | kMemTitle), host_protect(protect));
+    void* const result =
+        VirtualAlloc(address, size, allocation_type & ~(kMemGraphics | kMemTitle), host_protect(protect));
+    if (allocation_type & MEM_RESERVE) note_nested_allocation(result, address, size);
+    return result;
+}
+
+// With g_phys_mutex held: where the host allocation that starts at `owner` ends.
+uintptr_t allocation_end(uintptr_t owner) {
+    uintptr_t a = owner;
+    for (;;) {
+        MEMORY_BASIC_INFORMATION info{};
+        if (!VirtualQuery(reinterpret_cast<void*>(a), &info, sizeof(info)) || info.State == MEM_FREE ||
+            reinterpret_cast<uintptr_t>(info.AllocationBase) != owner) {
+            return a;
+        }
+        a = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+    }
 }
 
 // With g_phys_mutex held. Unmaps every physical page mapped in [base, base + size), releases every host allocation in
-// it (the placeholders the map calls split it into, and any committed replacement), and forgets the windows and
-// reservations it held. Keeps going past a failure, so as much as possible is released.
+// it (the placeholders the map calls split it into, and any committed replacement), and forgets the windows and the
+// reservation. A reservation recorded inside this one was made later, in a hole the title had released, and is left
+// alone with everything in it; so is an allocation that does not end inside the range. Keeps going past a failure,
+// so as much as possible is released.
 bool release_range(uintptr_t base, SIZE_T size) {
     const uintptr_t end = base + size;
+    std::vector<std::pair<uintptr_t, uintptr_t>> nested;
+    for (auto it = g_reservations.upper_bound(base); it != g_reservations.end() && it->first < end; ++it) {
+        nested.emplace_back(it->first, it->first + it->second);
+    }
+    const auto is_nested = [&nested](uintptr_t address) {
+        for (const auto& [first, last] : nested) {
+            if (address >= first && address < last) return true;
+        }
+        return false;
+    };
     bool ok = true;
     std::vector<uintptr_t> mapped;
     for (const auto& entry : g_mapped) {
-        if (entry.first >= base && entry.first < end) mapped.push_back(entry.first);
+        if (entry.first >= base && entry.first < end && !is_nested(entry.first)) mapped.push_back(entry.first);
     }
     for (const uintptr_t address : mapped) ok &= unmap_page(address);
     for (uintptr_t a = base; a < end;) {
@@ -710,13 +761,17 @@ bool release_range(uintptr_t base, SIZE_T size) {
         if (!VirtualQuery(reinterpret_cast<void*>(a), &info, sizeof(info))) return false;
         const uintptr_t next = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
         const uintptr_t owner = reinterpret_cast<uintptr_t>(info.AllocationBase);
-        if (info.State != MEM_FREE) {
-            if (owner < base || !VirtualFree(info.AllocationBase, 0, MEM_RELEASE)) ok = false;
+        if (info.State != MEM_FREE && !is_nested(owner)) {
+            if (owner < base || allocation_end(owner) > end || !VirtualFree(info.AllocationBase, 0, MEM_RELEASE)) {
+                ok = false;
+            }
         }
         a = next > a ? next : a + kPhysicalPageSize;
     }
-    g_windows.erase(g_windows.lower_bound(base), g_windows.lower_bound(end));
-    g_reservations.erase(g_reservations.lower_bound(base), g_reservations.lower_bound(end));
+    for (auto it = g_windows.lower_bound(base); it != g_windows.end() && it->first < end;) {
+        it = is_nested(it->first) ? std::next(it) : g_windows.erase(it);
+    }
+    g_reservations.erase(base);
     return ok;
 }
 

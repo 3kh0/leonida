@@ -247,5 +247,39 @@ class TestSimdDivergence(unittest.TestCase):
         for lane in range(64):
             self.assertEqual(simd.vgprs[6][lane], 0x70000000 + lane)
 
+class TestRegisterAliasing(unittest.TestCase):
+    def test_inplace_read_vdst_equals_vaddr(self) -> None:
+        state = ScalarState()
+        state.write_lds_u32(0x304, 0x12345678)
+        state.vgprs[1] = 0x300
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 1), RegSingle(RegType.VGPR, 1), offset=4)
+        state.step(inst)
+        self.assertEqual(state.vgprs[1], 0x12345678)
+
+    def test_chained_dependent_reads(self) -> None:
+        state = ScalarState()
+        state.write_lds_u32(0x100, 0x200)
+        state.write_lds_u32(0x200, 0x99887766)
+        state.vgprs[0] = 0x100
+        state.step(DSReadB32Inst(RegSingle(RegType.VGPR, 1), RegSingle(RegType.VGPR, 0)))
+        self.assertEqual(state.vgprs[1], 0x200)
+        state.step(DSReadB32Inst(RegSingle(RegType.VGPR, 2), RegSingle(RegType.VGPR, 1)))
+        self.assertEqual(state.vgprs[2], 0x99887766)
+
+    def test_neighbor_registers_unmodified(self) -> None:
+        state = ScalarState()
+        for i in range(10):
+            state.vgprs[i] = 0x2000 + i
+        state.write_lds_u32(0x40, 0xAABBCCDD)
+        state.vgprs[4] = 0x40
+        inst = DSReadB32Inst(RegSingle(RegType.VGPR, 5), RegSingle(RegType.VGPR, 4))
+        state.step(inst)
+        self.assertEqual(state.vgprs[5], 0xAABBCCDD)
+        self.assertEqual(state.vgprs[4], 0x40)
+        for i in range(10):
+            if i in (4, 5):
+                continue
+            self.assertEqual(state.vgprs[i], 0x2000 + i)
+
 if __name__ == "__main__":
     unittest.main()

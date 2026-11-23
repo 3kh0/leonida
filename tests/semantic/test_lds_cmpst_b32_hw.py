@@ -384,6 +384,40 @@ class TestSIMDDivergence(unittest.TestCase):
             self.assertEqual(wave.vgprs[lane][3], sentinel)
             self.assertEqual(lds.data[lane], 0x55)
 
+class TestRegisterAliasing(unittest.TestCase):
+    def test_alias_vcmp_equals_vsrc(self):
+        # cmp val and swap val are identical: no-op write
+        instructions = [
+            "v_mov_b32_e32 v0, 0",
+            "v_mov_b32_e32 v1, 0x12345678",
+            "ds_write_b32 v0, v1",
+            "s_waitcnt lgkmcnt(0)",
+            "ds_cmpst_b32 v0, v1, v1",
+            "s_waitcnt lgkmcnt(0)",
+            "ds_read_b32 v3, v0",
+            "s_waitcnt lgkmcnt(0)",
+            "v_mov_b32_e32 v31, 0",
+            "buffer_store_dword v3, v31, s[0:3], 0 offen",
+        ]
+        mem = run_cs_lds(instructions)
+        self.assertEqual(mem.get(0), 0x12345678)
+
+    def test_alias_vdst_equals_vcmp(self):
+        # In returning form: vdst and vcmp share register
+        instructions = [
+            "v_mov_b32_e32 v0, 0",
+            "v_mov_b32_e32 v1, 0x55555555",
+            "ds_write_b32 v0, v1",
+            "s_waitcnt lgkmcnt(0)",
+            "v_mov_b32_e32 v2, 0xAAAAAAAA",
+            "ds_cmpst_rtn_b32 v1, v0, v1, v2",
+            "s_waitcnt lgkmcnt(0)",
+            "v_mov_b32_e32 v31, 0",
+            "buffer_store_dword v1, v31, s[0:3], 0 offen",
+        ]
+        mem = run_cs_lds(instructions)
+        self.assertEqual(mem.get(0), 0x55555555)
+
 
 if __name__ == "__main__":
     unittest.main()

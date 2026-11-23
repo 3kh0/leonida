@@ -367,6 +367,20 @@ class TestSQuadmaskB64Translator(unittest.TestCase):
         words = mrt0_words(spv)
         self.assertEqual(words, [0x5555, 0, 1, 0x5555])
 
+def ref_s_bitset0_b32(dst: int, s0: int) -> int:
+    bit = s0 & 31
+    return (dst & ~(1 << bit)) & MASK32
+
+
+class TestSBitset0B32Reference(unittest.TestCase):
+    def test_ref_clear_bit(self):
+        self.assertEqual(ref_s_bitset0_b32(0xFFFFFFFF, 4), 0xFFFFFFEF)
+        self.assertEqual(ref_s_bitset0_b32(0xFFFFFFFF, 0), 0xFFFFFFFE)
+        self.assertEqual(ref_s_bitset0_b32(0xFFFFFFFF, 31), 0x7FFFFFFF)
+
+    def test_ref_clear_modulo(self):
+        self.assertEqual(ref_s_bitset0_b32(0xFFFFFFFF, 36), 0xFFFFFFEF)
+
 
 if __name__ == "__main__":
     unittest.main()

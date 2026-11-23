@@ -394,8 +394,10 @@ BLAS is identified by that stream's crc32 (197,324 distinct).
   sit on smaller BLAS (median 191 elements against 2,802) and the two kinds come in runs in file order (44,156
   runs; about 133,800 for a random interleave).
 * **Key to geometry.** A key always comes with one (BLAS, transform) pair, with the one exception already noted
-  in the ASSET-350 finding. The reverse does not hold: 11,209 of the 211,407 (crc32, transform) pairs carry more
-  than one key, up to 743.
+  in the ASSET-350 finding. The reverse does not hold. Keyed by the stored BLAS header (sizes, bounds, `crc32`) and
+  the transform, 1,030 of the 233,950 pairs carry more than one key, up to 60 (§4a's count with the same identity
+  is 1,008; the gap of about 20 is in how each descriptor is paired with its BLAS). Keyed by the `crc32` alone and
+  the transform, the pairs fall to 211,407 and 11,209 of them carry more than one key, up to 743.
 * **Not a name hash.** 0 of the 235,533 keys equal a hash of any of the 318,149 distinct drawable names of the 343,327
   models `rpf9dump models` reads from `levels.rpf`, as is, lower-cased, with `.ydr` or with the `.#dr` suffix,
   under Murmur3 x64-128 (either half), xxh64, FNV-1/FNV-1a 64, joaat64, CRC-64 (ECMA and ISO), djb2/sdbm 64 and

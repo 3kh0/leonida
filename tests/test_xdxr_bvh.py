@@ -287,8 +287,9 @@ class ClosestHit(unittest.TestCase):
         instance_offset = X.ptr_offset(struct.unpack_from("<I", tlas, root)[0])
         stored_x = struct.unpack_from("<4f", tlas, instance_offset)
         self.assertEqual(stored_x, (16777216.0, 0.0, 0.0, -16777216.0))
-        self.assertEqual(struct.unpack_from("<6f", tlas, root + 16),
-                         (0.0, 0.0, 0.0, 16777216.0, 1.0, 0.0))
+        # the world box of the stored transform, written with the BOX32 padding
+        lo, hi = X.pad_box32([0.0, 0.0, 0.0], [16777216.0, 1.0, 0.0])
+        self.assertEqual(struct.unpack_from("<6f", tlas, root + 16), (*lo, *hi))
         self.assertEqual(struct.unpack_from("<4f", tlas, instance_offset + 64),
                          (2.0 ** -24, 0.0, 0.0, 1.0))
         tlas_va = mem.place(0x200000, tlas)

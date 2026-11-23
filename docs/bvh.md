@@ -952,7 +952,7 @@ What it writes, and where each part comes from (line numbers in the public `.hls
 | Part | Layout | Source |
 |---|---|---|
 | Header | §3.1 table; `flags = 0x80000006` (BLAS) or `0x00000006` (TLAS); `crc32` and `compressionParams` 0 | `XboxBvh4Header` L2531, flag masks L2551, `XDXR_VERSION_2403 = 6` |
-| BOX32 / BOX16 | four children, unused slots `0xffffffff` with an empty box (min > max); BOX16 rounds min down and max up to half | `Node32` L2302, `Node16` L2285, `XdxrDecompressBox16` |
+| BOX32 / BOX16 | four children, unused slots `0xffffffff` with an empty box (min > max); BOX32 widens a box outward by 2^-19 of its largest coordinate magnitude (box padding, below); BOX16 rounds min down and max up to half | `Node32` L2302, `Node16` L2285, `XdxrDecompressBox16` |
 | Leaf | vertex slots 0–3, then `GeometryIndexAndFlags` (index << 8 \| flags), `BasePrimitiveIndex` (TRI0), `PrimitiveIndex2` (TRI1), one remap byte per triangle node type | `Leaf` L2342, `XDXR_Runtime_Callback_GetPrimitiveIndex` |
 | TRI0 / TRI1 | TRI0 reads slots (0, 1, 2), TRI1 reads (1, 3, 2); TRI2/TRI3 read slot 4, which overlaps the metadata, and are not emitted | `Read3Verts`, `XdxrGetVertexIndicesForNodeType` |
 | Barycentric remap | byte `8 * type` of leaf `+60`: bits [1:0] pick which edge function is the first barycentric (0 U, 1 V, 2 W), [3:2] the second; U weighs the first vertex read | `TestXboxBvh4Leaf` |
@@ -1129,6 +1129,40 @@ is the nodes it wrote, so `COMPACTED_SIZE` and `CURRENT_SIZE` (from
 mode are refused at replay as unsupported, not faked. In `LEONIDA_RT_AS=khr` mode the postbuild descs stay ignored,
 as before.
 
+**Box padding.** Every child box is written widened outward by 2^-19 of its largest coordinate magnitude (16 to
+32 float32 steps of it, each bound rounded to nearest, the same bits on the GPU and in `xdxr_bvh.py build_blas`), in
+builds and refits (`xdxr_build.comp` `BOX_PAD`, in `store_slot_box`). A BOX16 box is padded before it is rounded
+outward to halves: a coordinate a half holds exactly (0, 1, 2, a grid's) would not move otherwise, and a flat paired
+grid built with BOX16 lost 24 of 200 edge rays on an RTX 5080 without it (`box16_rounding` expects the padded box). A
+box with an infinite coordinate is not padded. The box accumulators keep the exact boxes, so the padding does not
+grow level by level and a parent's padded box still holds its children's. The
+translated `image_bvh` makes the box test and the triangle edge rule in float32, apart. On an edge that is also the
+face of the two triangles' boxes (flat and axis-aligned meshes, and vertices), a ray can belong to one triangle by the
+edge rule and fall one rounding step outside that triangle's box: both triangles are skipped and the ray passes
+through a closed mesh. D3D12 requires a ray through a shared edge to hit one of the triangles. Padding by the box
+extent instead does not hold far from the origin, where one float32 step of a coordinate is larger than the extent
+times 2^-19. RDNA2's slab rounding toward zero (#4957), which the translator follows since SHADER-650, loses more rays through
+exact boxes than rounding to nearest, and none through padded ones.
+
+The padding makes shared edges watertight for ray origins near the mesh only. The slab test rounds plane - origin to
+float32 steps of the ray origin's magnitude, and the pad is a fixed number of steps of the box's: once the ray origin
+is some 30 times farther out than the box's largest coordinate, rays through shared edges are lost again (#5092, on
+an RTX 3090: a 32 x 32 floor of 1 m quads seen from 200 m loses 6 of 300 edge rays; a grid with origins within +-1000
+loses 26 of 300). Holding at any distance needs the slab test widened in proportion to t in the translator, as robust
+traversal does (tmax times 1 + 2 gamma_3), which is not done.
+
+`tools/xdxr_bvh32.py` runs the step with float32 rounding after every operation, as the translator's NoContraction
+SPIR-V does, and compares a whole BLAS traversal with a brute force over every leaf the tree holds (`tree_leaves`:
+the leaf pointers, boxes ignored; not the leaf records, since a paired sibling's own record stays unreferenced).
+`xdxr_bvh.py check-build` traces rays through the vertices and edges of every BLAS case with it (`--edge-rays`; the
+box slabs round toward zero as the translator does, `--box-rounding nearest` for the rule before SHADER-650; the
+triangle step gives the translator's RDNA2 words, bit for bit in `tests/test_xdxr_bvh32.py`) and fails on a hit the
+tree loses; it also counts the edge rays lost from
+origins within +-1000 (`--far-spread`) and only prints them. `vk_xdxr_build_test` adds `watertight_shared_edge` (two
+triangles, whose root boxes it checks are padded off their plane) and `watertight_closed_cube`; only check-build
+traces the edge rays, so run `xdxr_build_check` too. `tests/test_xdxr_bvh32.py` checks the CPU builder the same
+way and checks the model against the translator's words on a ray through a shared edge.
+
 Not done yet: serialization; a compaction that reclaims the leaves that pairing leaves unused. A surface-area
 collapse of the radix tree, or treelet restructuring, would trim a few more steps.
 
@@ -1136,6 +1170,7 @@ collapse of the radix tree, or treelet restructuring, would trim a few more step
 python -I tools/xdxr_bvh.py selftest --seed 1 --rays 400   # build BLASes, compare closest hits with brute force
 python -I tools/xdxr_bvh.py validate <dumped BVH buffer>    # structural check of a runtime buffer
 python -I tests/test_xdxr_bvh.py
+python -I tests/test_xdxr_bvh32.py
 ```
 
 ## 7b. The first real pack BLAS on a GPU

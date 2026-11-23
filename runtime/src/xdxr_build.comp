@@ -87,6 +87,13 @@ const uint REMAP_IDENTITY = 0x09u;
 const uint FLAG_TLAS = 1u, FLAG_BOX16 = 2u, FLAG_PAIR = 4u;  // pc.flags; xdxr_build.h XdxrBuilder flag_*
 const uint FLAG_BOTTOM_LEVEL = 0x80000000u, VERSION_2403 = 6u, INST_IDENTITY_ROTATION = 0x80000000u,
            INST_FLAGS_MASK = 0xc0000000u;
+// A child box is written widened outward by BOX_PAD of its largest |coordinate| (tools/xdxr_bvh.py BOX_PAD). The
+// translated box test and triangle test round in float32 apart: without it, a ray on an edge that also lies on the
+// face of the boxes (a flat or axis-aligned mesh, a vertex) can be cut by the box of the triangle the edge rule gives
+// it to, and pass through a closed mesh (docs/bvh.md 7a, box padding). Only store_slot_box pads (a BOX16 box before
+// it is rounded outward to halves: a coordinate a half holds exactly would not move); the accumulators keep the
+// exact boxes, so the padding does not grow level by level, and a parent's padded box still holds its children's.
+const float BOX_PAD = 1.9073486328125e-6;          // 2^-19: 16 to 32 float32 steps of the largest coordinate
 
 layout(push_constant) uniform Push {
     uvec2 dst;            // the acceleration structure (header at byte 0)
@@ -631,6 +638,14 @@ uint child_ptr(uint c) {
 // A box's six floats, or with BOX16 its three words of halves rounded outward, at child slot c of the node record at
 // byte o; `box16` is the node's own type (what the structure holds, whatever the flags).
 void store_slot_box(uint o, uint c, bool box16, vec3 lo, vec3 hi) {
+    if (!box_empty(lo, hi)) {                           // written padded (BOX_PAD), BOX16 before its outward rounding
+        vec3 m = max(abs(lo), abs(hi));
+        float pad = max(max(m.x, m.y), m.z) * BOX_PAD + 1e-30;
+        if (!isinf(pad) && !isnan(pad)) {               // an infinite coordinate: inf - inf would be a NaN bound
+            lo -= vec3(pad);
+            hi += vec3(pad);
+        }
+    }
     if (box16) {
         store_box16(o + 16u + 12u * c, lo, hi);
         return;

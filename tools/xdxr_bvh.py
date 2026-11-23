@@ -137,6 +137,36 @@ def decode_box16(words):
     return v[0:3], v[3:6]
 
 
+# A BOX32 child box is widened outward by BOX_PAD of its largest coordinate magnitude (xdxr_build.comp BOX_PAD):
+# the float32 slab test and the triangle test round apart, and a ray on an edge that also lies on a box face must
+# not be cut by the box of the triangle the edge rule gives it to (docs/bvh.md 7a, box padding).
+BOX_PAD = 2.0 ** -19
+_PAD_FLOOR = 1e-30          # the GLSL literal, so a box at the origin still widens
+
+
+def _f32_or_inf(x):
+    """x rounded to the nearest float32, as a GPU float operation does; inf past the range."""
+    try:
+        return f32(x)
+    except OverflowError:
+        return math.copysign(INF, x)
+
+
+def pad_box32(lo, hi):
+    """The BOX32 bounds xdxr_build.comp writes for an exact float32 box, bit for bit: pad = max|coordinate| * BOX_PAD
+    + 1e-30 and each bound moved out by it, every operation rounded to the nearest float32 (16 to 32 float32 steps of
+    the largest coordinate). Empty boxes stay, and so do boxes with an infinite coordinate (the pad would be inf, and
+    inf - inf a NaN bound)."""
+    if not all(lo[c] <= hi[c] for c in range(3)):
+        return lo, hi
+    # max|coordinate| * 2^-19 is exact in double; the sum of two float32 values rounds once more, to float32
+    pad = _f32_or_inf(max(abs(x) for x in [*lo, *hi]) * BOX_PAD + f32(_PAD_FLOOR))
+    if not math.isfinite(pad):
+        return lo, hi
+    return [_f32_or_inf(x - pad) for x in lo], [_f32_or_inf(x + pad) for x in hi]
+
+
+
 def encode_box16(lo, hi):
     h = [half_round(c, False) for c in lo] + [half_round(c, True) for c in hi]
     return (h[0] | h[1] << 16, h[2] | h[3] << 16, h[4] | h[5] << 16)
@@ -252,9 +282,10 @@ def _write_nodes(buf, inner, node_offsets, child_ptr, child_box, box16, parent_o
             else:
                 lo, hi = [INF] * 3, [-INF] * 3          # min > max: the box test misses it
             if box16:
-                struct.pack_into("<3I", buf, off + 16 + 12 * i, *encode_box16(lo, hi))
+                struct.pack_into("<3I", buf, off + 16 + 12 * i, *encode_box16(*pad_box32(lo, hi)))
             else:
-                struct.pack_into("<6f", buf, off + 16 + 24 * i, *lo, *hi)
+                plo, phi = pad_box32(lo, hi)
+                struct.pack_into("<6f", buf, off + 16 + 24 * i, *plo, *phi)
 
 
 def _write_parents(buf, parents_off, elements_off, end, parent_of, root_ptr):
@@ -745,9 +776,9 @@ def validate(data, expect_bottom=None):
 
 
 def box16_rounding(data):
-    """Checks that every BOX16 child box of a bottom-level BVH holds exactly encode_box16 of the exact box of the
-    triangles under that child: the bits, not just containment. The exact box comes from the leaves' own vertices, so
-    this needs nothing but the buffer. A triangle with a NaN vertex has an empty box, as in the builder. Returns a list
+    """Checks that every BOX16 child box of a bottom-level BVH holds exactly encode_box16 of the padded (pad_box32)
+    exact box of the triangles under that child: the bits, not just containment. The exact box comes from the leaves'
+    own vertices, so this needs nothing but the buffer. A triangle with a NaN vertex has an empty box, as in the builder. Returns a list
     of problems (empty = every BOX16 word matches)."""
     errs = []
     root = struct.unpack_from("<I", data, 48)[0]
@@ -768,7 +799,7 @@ def box16_rounding(data):
             box = _union(boxes) if boxes else empty
             if kind == BOX16:
                 for i, k in enumerate(kids):
-                    want = encode_box16(*(exact(k) if k != INVALID else empty))
+                    want = encode_box16(*(pad_box32(*exact(k)) if k != INVALID else empty))
                     got = struct.unpack_from("<3I", data, off + 16 + 12 * i)
                     if tuple(got) != tuple(want):
                         errs.append(f"BOX16 {p:#x} child {i}: {[hex(w) for w in got]}, expected "
@@ -872,8 +903,20 @@ def _load_case(directory, name):
     return desc, data
 
 
-def check_build(directory, rays=300, seed=1):
-    """Validate every <case>.bin of a GPU build and trace rays against brute force. Returns a list of problems."""
+# Box padding keeps edge rays near the origin only (docs/bvh.md 7a): the pad is 16 to 32 float32 steps of the box's
+# largest coordinate, and the slab test rounds plane - origin to steps of the origin's. Once origins are some 30 times
+# farther out than the mesh, edge rays are lost again (#5092: a 1 m grid seen from 200 m loses 6 of 300). check-build
+# counts such rays from origins within +-far_spread and prints them; they are not a failure.
+FAR_SPREAD = 1000.0
+
+
+def check_build(directory, rays=300, seed=1, edge_rays=200, box_rounding="zero", far_spread=FAR_SPREAD):
+    """Validate every <case>.bin of a GPU build and trace rays against brute force; for a BLAS, also check with
+    tools/xdxr_bvh32.py that edge and vertex rays lose no hit in the tree, and report (only) those lost from far
+    origins. Returns a list of problems."""
+    import os
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import xdxr_bvh32 as bvh32
     names = _case_names(directory)
     if not names:
         return [f"no cases in {directory}"]
@@ -963,9 +1006,27 @@ def check_build(directory, rays=300, seed=1):
                 same = (got["instance"], (got["geometry"], got["primitive"])) == (want["instance"], want_id)
                 same = same and math.isclose(got["t"], want["t"], rel_tol=1e-4)
             bad += not same
+        lost_note = ""
+        if desc["kind"] == "blas" and edge_rays:
+            # rays through vertices and edges, traced with the float32 step: the tree must keep every hit its
+            # leaves give (a ray on an edge that lies on a box face, docs/bvh.md 7a box padding)
+            count = min(edge_rays, max(10, 150000 // max(1, len(desc["triangles"]))))
+            tris3 = [t[:3] for t in desc["triangles"]]
+            lost = bvh32.lost_hits(mem, desc["address"],
+                                   bvh32.edge_rays(tris3, count, random.Random(f"edge:{seed}:{n}")), box_rounding)
+            lost_note = f", {len(lost)}/{count} edge rays lost by the tree (float32, box rounding {box_rounding})"
+            if far_spread:
+                far_count = max(5, count // 2)
+                far = bvh32.lost_hits(mem, desc["address"], bvh32.edge_rays(tris3, far_count, random.Random(
+                    f"far:{seed}:{n}"), far_spread), box_rounding)
+                lost_note += f"; far origins (to +-{far_spread:g}, reported only): {len(far)}/{far_count} lost"
+            if lost:
+                o, d, got, want = lost[0]
+                problems.append(f"{n}: {len(lost)} of {count} edge rays miss in the tree but hit a leaf "
+                                f"(first: origin {o}, direction {d}, leaf t {want['t']!r}, tree {got and got['t']!r})")
         paired = f", {pairs} TRI1" if pairs else ""
         print(f"{n}: {len(data)} bytes{paired}, {len(errs)} validation errors, {bad}/{case_rays} rays differ "
-              f"({hits} hits), {stats['steps'] / max(case_rays, 1):.1f} steps per ray")
+              f"({hits} hits), {stats['steps'] / max(case_rays, 1):.1f} steps per ray{lost_note}")
         if bad:
             problems.append(f"{n}: {bad} of {case_rays} rays differ from brute force")
         if desc["kind"] == "blas" and len(desc["triangles"]) > 4 and hits == 0:
@@ -1037,6 +1098,12 @@ def main(argv=None):
     c = sub.add_parser("check-build", help="check the cases vk_xdxr_build_test wrote to a directory")
     c.add_argument("dir")
     c.add_argument("--rays", type=int, default=300)
+    c.add_argument("--edge-rays", type=int, default=200, help="BLAS rays through vertices and edges (0: none)")
+    c.add_argument("--box-rounding", choices=("nearest", "zero"), default="zero",
+                   help="float32 slab rounding of the box test: toward zero as RDNA2 and the translator (SHADER-650), "
+                        "or to nearest as the translator before it")
+    c.add_argument("--far-spread", type=float, default=FAR_SPREAD,
+                   help="also count edge rays lost from origins within +-this, reported, not failed (0: none)")
     a = ap.parse_args(argv)
     if a.cmd == "check-build":
         if a.rays < 1:
@@ -1045,7 +1112,8 @@ def main(argv=None):
             print(f"no cases in {a.dir}: skipped (the build step skipped or did not run)")
             return 77                                   # ctest SKIP_RETURN_CODE
         try:
-            problems = check_build(a.dir, a.rays)
+            problems = check_build(a.dir, a.rays, edge_rays=a.edge_rays, box_rounding=a.box_rounding,
+                                   far_spread=a.far_spread)
         except CaseError as error:
             print(f"ERROR: {error}", file=sys.stderr)
             return 2

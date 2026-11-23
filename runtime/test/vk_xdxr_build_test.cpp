@@ -6,8 +6,10 @@
 //
 // Cases: one triangle; five (two levels); 1000 random triangles; an indexed R16 grid with a 16-byte vertex stride;
 // R32 indices with R32G32 vertices; a geometry transform; two geometries with an inactive (NaN) triangle; no
-// triangles; 5000 triangles (many radix-sort tiles); updates (refits) in place and into another buffer; clones and a
-// compaction (CopyRaytracingAccelerationStructure) with the postbuild size; a TLAS of four instances (rotated and scaled, one with mask 0, one with no BLAS);
+// triangles; two triangles sharing an edge (their root boxes must be padded off their plane) and a closed cube
+// (edge and vertex rays); 5000 triangles (many radix-sort tiles); updates (refits) in place and into another buffer;
+// clones and a compaction (CopyRaytracingAccelerationStructure) with the postbuild size; a TLAS of four instances
+// (rotated and scaled, one with mask 0, one with no BLAS);
 // BOX16 builds (blas_box16_*: half boxes, which check-build compares bit for bit with tools/xdxr_bvh.py encode_box16),
 // including coordinates past the half range and below its smallest normal, and a refit; TRI1 pairing (blas_paired_*:
 // sibling triangles that share an edge in one leaf), on grids, BOX16, a transform, inactive triangles, triangles that
@@ -27,6 +29,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <random>
 #include <string>
 #include <vector>
@@ -74,6 +77,30 @@ bool write_file(const std::string& path, const void* data, std::size_t bytes) {
     std::ofstream f(path, std::ios::binary);
     f.write(static_cast<const char*>(data), std::streamsize(bytes));
     return bool(f);
+}
+
+// The BOX32 boxes under the root of a dumped BLAS whose triangles lie in the plane z = 0 must be padded off that plane
+// (xdxr_build.comp BOX_PAD): unpadded, a ray through an edge on a box face can be cut by the box of the triangle the
+// edge rule gives it to. check-build traces such rays; this fails on the builder's own output when the pad is gone.
+bool flat_root_boxes_padded(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    const std::vector<char> b{std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+    std::uint32_t root = 0;
+    if (b.size() < 64) return false;
+    std::memcpy(&root, b.data() + 48, 4);
+    const std::size_t node = std::size_t(root >> 3) * 64;
+    if ((root & 7u) != 5u || node + 112 > b.size()) return false;             // a BOX32 node inside the buffer
+    int boxes = 0;
+    for (int i = 0; i < 4; ++i) {
+        std::uint32_t child = 0;
+        float box[6];
+        std::memcpy(&child, b.data() + node + 4 * i, 4);
+        std::memcpy(box, b.data() + node + 16 + 24 * i, sizeof box);
+        if (child == 0xffffffffu) continue;
+        if (!(box[2] < 0.0f && box[5] > 0.0f)) return false;
+        ++boxes;
+    }
+    return boxes > 0;
 }
 
 // The size a structure's header gives (totalSizeIn64BNodes does not count the header): the nodes the build wrote,
@@ -349,6 +376,40 @@ int main(int argc, char** argv) {
     b.vertex_data[3 * 3 * 7] = std::nanf("");                    // triangle 7 of geometry 1: inactive
     if (build_blas(gpu, builder, dir, "blas_two_geometries", {a, b}, multi)) return 1;
     if (build_blas(gpu, builder, dir, "blas_empty", {}, empty)) return 1;
+    // A ray through the edge two triangles share must hit one of them (D3D12 watertightness), also where the edge
+    // lies on the face of their boxes: two triangles side by side, and a closed cube of axis-aligned faces. check-build
+    // traces rays through their vertices and edges with the float32 step (tools/xdxr_bvh32.py). Their names sort after
+    // the other cases', so check-build's random rays for those are the same as before they were added.
+    Geometry pair;
+    pair.triangle_count = 2;
+    pair.vertex_data = {0, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 2, 0, 0, 1, 1, 0};
+    auto closed_cube = [](std::uint32_t n, float h) {
+        Geometry g;
+        for (int axis = 0; axis < 3; ++axis)
+            for (int side = 0; side < 2; ++side) {
+                const std::uint32_t base = std::uint32_t(g.vertex_data.size() / 3);
+                for (std::uint32_t j = 0; j <= n; ++j)
+                    for (std::uint32_t i = 0; i <= n; ++i) {
+                        float p[3];
+                        p[axis] = side ? h : -h;
+                        p[(axis + 1) % 3] = -h + 2 * h * float(i) / float(n);
+                        p[(axis + 2) % 3] = -h + 2 * h * float(j) / float(n);
+                        g.vertex_data.insert(g.vertex_data.end(), p, p + 3);
+                    }
+                for (std::uint32_t j = 0; j < n; ++j)
+                    for (std::uint32_t i = 0; i < n; ++i) {
+                        const std::uint32_t a = base + j * (n + 1) + i;
+                        const std::uint32_t q[6] = {a, a + 1, a + n + 2, a, a + n + 2, a + n + 1};
+                        g.indices.insert(g.indices.end(), q, q + 6);
+                    }
+            }
+        g.triangle_count = std::uint32_t(g.indices.size() / 3);
+        return g;
+    };
+    Built shared, cube;
+    if (build_blas(gpu, builder, dir, "watertight_shared_edge", {pair}, shared)) return 1;
+    EXPECT(flat_root_boxes_padded(dir + "/watertight_shared_edge.bin"));
+    if (build_blas(gpu, builder, dir, "watertight_closed_cube", {closed_cube(4, 2.0f)}, cube)) return 1;
     // many radix-sort tiles (RADIX_TILE elements each), the last one partial (fewer rays: the brute force is slow)
     Built tiles;
     if (build_blas(gpu, builder, dir, "blas_three_sort_tiles", {soup(5000)}, tiles, 200)) return 1;

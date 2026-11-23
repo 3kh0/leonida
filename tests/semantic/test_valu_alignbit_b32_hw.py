@@ -234,5 +234,83 @@ class TestValuAlignbitB32ScalarInterpreter(unittest.TestCase):
         self.assertEqual(state.vgprs[2], 0x56789ABC)
 
 
+class SIMDMachineState:
+    def __init__(self, num_lanes: int = 64, exec_mask: int = MASK64) -> None:
+        self.num_lanes = num_lanes
+        self.exec_mask = exec_mask
+        self.lanes_vgpr: list[list[int]] = [[0] * 256 for _ in range(num_lanes)]
+        self.sgprs: list[int] = [0] * 106
+        self.scc: int = 0
+
+    def is_lane_active(self, lane: int) -> bool:
+        return bool((self.exec_mask >> lane) & 1)
+
+    def read_lane_operand(self, lane: int, op: Operand) -> int:
+        if op.kind == OperandKind.VGPR:
+            return self.lanes_vgpr[lane][op.index] & MASK32
+        if op.kind == OperandKind.SGPR:
+            return self.sgprs[op.index] & MASK32
+        return op.value & MASK32
+
+
+class SIMDInterpreter:
+    def step(self, instr: VAlignbitB32Instruction, state: SIMDMachineState) -> list[Optional[int]]:
+        results: list[Optional[int]] = []
+        for lane in range(state.num_lanes):
+            if state.is_lane_active(lane):
+                s0 = state.read_lane_operand(lane, instr.src0)
+                s1 = state.read_lane_operand(lane, instr.src1)
+                s2 = state.read_lane_operand(lane, instr.src2)
+                res = ref_alignbit_b32(s0, s1, s2)
+                if instr.dst.kind == OperandKind.VGPR:
+                    state.lanes_vgpr[lane][instr.dst.index] = res
+                results.append(res)
+            else:
+                results.append(None)
+        return results
+
+
+class TestValuAlignbitB32SIMDDivergence(unittest.TestCase):
+    """Stage 4: SIMD multi-lane divergence and 32/64-bit EXEC masking."""
+
+    def test_wave32_full_and_partial_divergence(self) -> None:
+        state = SIMDMachineState(num_lanes=32, exec_mask=0x55555555)  # even lanes active
+        for lane in range(32):
+            state.lanes_vgpr[lane][1] = 0x12345678
+            state.lanes_vgpr[lane][2] = 0x9ABCDEF0
+            state.lanes_vgpr[lane][0] = 0xDEADBEEF  # canary in dst
+
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.vgpr(1),
+            src1=Operand.vgpr(2),
+            src2=Operand.imm(8),
+        )
+        results = SIMDInterpreter().step(instr, state)
+        for lane in range(32):
+            if lane % 2 == 0:
+                self.assertEqual(results[lane], 0x789ABCDE)
+                self.assertEqual(state.lanes_vgpr[lane][0], 0x789ABCDE)
+            else:
+                self.assertIsNone(results[lane])
+                self.assertEqual(state.lanes_vgpr[lane][0], 0xDEADBEEF)
+
+    def test_wave64_zero_mask_preservation(self) -> None:
+        state = SIMDMachineState(num_lanes=64, exec_mask=0)
+        for lane in range(64):
+            state.lanes_vgpr[lane][0] = 0xCAFE0000 | lane
+
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.vgpr(1),
+            src1=Operand.vgpr(2),
+            src2=Operand.imm(8),
+        )
+        results = SIMDInterpreter().step(instr, state)
+        self.assertTrue(all(r is None for r in results))
+        for lane in range(64):
+            self.assertEqual(state.lanes_vgpr[lane][0], 0xCAFE0000 | lane)
+
+
 if __name__ == "__main__":
     unittest.main()

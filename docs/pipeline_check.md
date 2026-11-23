@@ -394,3 +394,19 @@ pipeline is created with the runtime's resource contract. It does not prove:
 
 No shader data, names or caches are committed. The caches live in the work directory and are inputs
 to a later run, not part of the repository.
+
+### Driver creation for stored geometry passes
+
+With a checker supporting `--graphics-manifest`, run the following against the stored pass
+export and the corresponding translator output directory (including its `index.json`).
+
+```
+python -I tools/sgd5_geometry_creation.py passes.json spirv --checker path/to/vk_pipeline_check --report private.json
+```
+
+Each distinct VS/GS/PS triple uses the checker's fixed-function state and its three real shader
+modules. The summary counts each status by triple and by stored pass occurrence. Missing files,
+missing index entries, rejected modules, feature skips, failed pipeline creation and successful
+creation have separate totals. A partial checker run exits with an error. The optional local
+report includes the shader stems and individual outcomes and must stay private. Creation issues
+no draws and does not validate the pass's authored render states.

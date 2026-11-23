@@ -222,5 +222,11 @@ class VFrexpExpI16F16AstTests(unittest.TestCase):
         self.assertEqual(ast.mnemonic, "v_frexp_exp_i16_f16")
         self.assertEqual(ast.dst.index, 1)
 
+class VFrexpExpI16F16ScalarInterpreterTests(unittest.TestCase):
+    def test_frexp_exp_scalar_execution(self):
+        # 2.0 = 0.5 * 2^2 -> exp is 2
+        res = oracle_frexp_exp_i16_f16(f16_to_u16(2.0))
+        self.assertEqual(res, 2)
+
 if __name__ == "__main__":
     unittest.main()

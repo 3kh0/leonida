@@ -6322,8 +6322,13 @@ int main() {
             list1->AtomicCopyBufferUINT(readback.p, 256, upload.p, 4096, 0, nullptr, nullptr);
             EXPECT(list->Close() == E_INVALIDARG);
             EXPECT(SUCCEEDED(list->Reset(allocator.p, nullptr)));
-            const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER misaligned{0x10002, 1};
-            list2->WriteBufferImmediate(1, &misaligned, nullptr);
+            const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER null_dest{0, 1};
+            list2->WriteBufferImmediate(1, &null_dest, nullptr);
+            EXPECT(list->Close() == E_INVALIDARG);
+            EXPECT(SUCCEEDED(list->Reset(allocator.p, nullptr)));
+            const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER bad_mode_write{0x10000, 1};
+            const auto bad_mode = static_cast<D3D12_WRITEBUFFERIMMEDIATE_MODE>(3);
+            list2->WriteBufferImmediate(1, &bad_mode_write, &bad_mode);
             EXPECT(list->Close() == E_INVALIDARG);
             // A region with NumSubresources = UINT_MAX is an explicit range, not a null region.
             EXPECT(SUCCEEDED(list->Reset(allocator.p, nullptr)));
@@ -7218,6 +7223,15 @@ int main() {
             std::memcpy(&word, static_cast<const std::uint8_t*>(rb_bytes) + 16, sizeof(word));
             EXPECT(word == 0xCAFEBABEu);
             placed_rb->Unmap(0, nullptr);
+
+            // Unaligned WriteBufferImmediate closes cleanly (matching D3D12/WARP) and is rejected at replay before
+            // vkCmdUpdateBuffer (VUID-vkCmdUpdateBuffer-dstOffset-00032).
+            EXPECT(SUCCEEDED(placed_allocator->Reset()) && SUCCEEDED(placed_list->Reset(placed_allocator.p, nullptr)));
+            const D3D12_WRITEBUFFERIMMEDIATE_PARAMETER unaligned_wp{placed_va + 2, 0x12345678u};
+            placed_list2->WriteBufferImmediate(1, &unaligned_wp, &wm);
+            EXPECT(placed_list->Close() == S_OK);
+            queue->ExecuteCommandLists(1, placed_lists);
+            EXPECT(rt::d3d12::last_execute_result(queue.p) == leonida::ReplayResult::invalid_copy);
         }
 
         // The heap owns the range: releasing it puts the next heap of that size back at the same place.

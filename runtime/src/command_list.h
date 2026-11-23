@@ -776,9 +776,11 @@ public:
         return append(discard);
     }
 
-    // WriteBufferImmediate: D3D12 requires a 4-byte aligned, non-null address and one of the three modes.
+    // WriteBufferImmediate: D3D12 requires a non-null address and one of the three modes. 4-byte alignment is not
+    // rejected at recording time (Windows D3D12 / WARP closes the list cleanly) and is enforced at replay before
+    // vkCmdUpdateBuffer.
     bool write_immediate(const WriteImmediate& write) {
-        if (!write.address || write.address % 4 || write.mode > write_immediate_mode::marker_out) return false;
+        if (!write.address || write.mode > write_immediate_mode::marker_out) return false;
         return append(write);
     }
 

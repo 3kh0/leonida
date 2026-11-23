@@ -600,6 +600,35 @@ class PedCataloguesTests(unittest.TestCase):
             self.assertEqual(rep["presets"], 15)
             self.assertEqual(rep["warnings"], 0)
 
+    def test_bom_index_json_keeps_the_stream_join(self):
+        # A carve index.json saved with a UTF-8 BOM (Notepad, PowerShell 5.1) must still join
+        # the split streams; read as plain utf-8 it is a JSONDecodeError, the join is skipped
+        # and the two half-streams parse as no catalogue at all.
+        blocks, _ = build_rich_catalogue_blocks()
+        raw_0drp = build_synthetic_0drp(blocks)
+        split = len(raw_0drp) // 2
+        with tempfile.TemporaryDirectory() as tmp:
+            carve_dir = os.path.join(tmp, "carved")
+            os.makedirs(carve_dir)
+            with open(os.path.join(carve_dir, "000000000100.bin"), "wb") as fh:
+                fh.write(raw_0drp[:split])
+            with open(os.path.join(carve_dir, "000000000300.bin"), "wb") as fh:
+                fh.write(raw_0drp[split:])
+            with open(os.path.join(carve_dir, "index.json"), "w", encoding="utf-8-sig") as fh:
+                json.dump(
+                    {
+                        "files": [
+                            {"offset": 0x100, "stored": 0x1F5, "file": "000000000100.bin"},
+                            {"offset": 0x300, "stored": 0x200, "file": "000000000300.bin"},
+                        ]
+                    },
+                    fh,
+                )
+            rep = pc.census(carve_dir)
+            self.assertEqual(rep["catalogues"], 1)
+            self.assertEqual(rep["by_framing"], {"0drp": 1})
+            self.assertEqual(rep["presets"], 5)
+
     def test_cli_census_inspect_resolve_and_guards(self):
         blocks, hashes = build_rich_catalogue_blocks()
         raw_0drp = build_synthetic_0drp(blocks)

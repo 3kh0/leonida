@@ -487,6 +487,41 @@ class TestIEEE754BoundaryExtremes(unittest.TestCase):
         mem = run_cs_lds(instructions)
         self.assertEqual(mem.get(0), 0)
 
+class TestNegativeControlsAndMutation(unittest.TestCase):
+    def test_out_of_bounds_register_rejection(self):
+        with self.assertRaises(ValueError):
+            Operand.vgpr(256)
+
+    def test_out_of_bounds_offset_rejection(self):
+        with self.assertRaises(ValueError):
+            DSCmpStB32Instruction(
+                vaddr=Operand.vgpr(0),
+                vcmp=Operand.vgpr(1),
+                vsrc=Operand.vgpr(2),
+                offset=70000,
+            )
+
+    def test_mutation_unconditional_overwrite(self):
+        # A bug where compare is ignored and swap is always written
+        curr = 0x11111111
+        cmp_ = 0x22222222
+        swap_ = 0x33333333
+        new_val, _ = ref_cmpst_b32(curr, cmp_, swap_)
+        mutated = swap_
+        self.assertEqual(new_val, curr)
+        self.assertNotEqual(new_val, mutated)
+
+    def test_mutation_inverted_comparison(self):
+        # A bug where swap happens on inequality rather than equality
+        curr = 0x11111111
+        cmp_ = 0x11111111
+        swap_ = 0x33333333
+        new_val, _ = ref_cmpst_b32(curr, cmp_, swap_)
+        mutated_val = swap_ if curr != cmp_ else curr
+        self.assertEqual(new_val, swap_)
+        self.assertEqual(mutated_val, curr)
+        self.assertNotEqual(new_val, mutated_val)
+
 
 if __name__ == "__main__":
     unittest.main()

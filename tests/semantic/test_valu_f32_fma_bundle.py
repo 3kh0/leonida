@@ -248,6 +248,18 @@ class TestVFmaakF32InlineConstant(unittest.TestCase):
                 words = run_bundle_ps(lines, f"ps_fmaak_k_{k:#x}")
                 self.assertEqual(words[0], expected)
 
+class TestVFmaakF32IEEEEdgeCases(unittest.TestCase):
+    """Stage 4 for v_fmaak_f32: IEEE boundary extremes with inline constant."""
+
+    def test_v_fmaak_f32_edge_cases(self):
+        lines = [
+            "v_mov_b32 v1, 0x00000000",
+            "v_mov_b32 v2, 0x40000000",
+            "v_fmaak_f32 v0, v1, v2, 0x40400000",  # 0.0 * 2.0 + 3.0 = 3.0
+        ]
+        words = run_bundle_ps(lines, "ps_fmaak_zero")
+        self.assertEqual(words[0], 0x40400000)
+
 
 if __name__ == '__main__':
     unittest.main()

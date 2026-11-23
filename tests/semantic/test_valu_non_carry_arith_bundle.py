@@ -334,6 +334,13 @@ class TestVSubNcI32AST(unittest.TestCase):
         expr_cl = VSubNcI32Expr(0x80000000, 5, clamp=True)
         self.assertEqual(expr_cl.eval(), 0x80000000)
 
+class TestVSubNcI32WrappingAndSaturation(unittest.TestCase):
+    def test_signed_sub_extremes(self) -> None:
+        # Min negative - 1 without clamp wraps to max positive
+        self.assertEqual(ref_v_sub_nc_i32(0x80000000, 1, clamp=False), 0x7FFFFFFF)
+        # Max positive - (-1) without clamp wraps to min negative
+        self.assertEqual(ref_v_sub_nc_i32(0x7FFFFFFF, 0xFFFFFFFF, clamp=False), 0x80000000)
+
 
 if __name__ == "__main__":
     unittest.main()

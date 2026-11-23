@@ -14,8 +14,9 @@ with a gradient (VKS_TEX=1), so sampled values are not all zero. `--lo/--hi` spl
 and `--only 3,7` re-runs single shaders (into `<tag>_<variant>_re`, which `compare` prefers), for example the ones that
 timed out while another process was starting.
 
-Shaders are numbered by their place in `sample.json`; the summary lines and everything under `<dir>` except
-`sample.json` (which names the sampled shaders, so keep it out of reports) are counts and numbers only.
+Shaders are numbered by their place in `sample.json`. Use a new `--out` for a different sample.
+The summary lines and everything under `<dir>` except `sample.json` are counts and numbers only.
+Keep `sample.json` out of reports because it names the sampled shaders.
 """
 import argparse
 import json
@@ -25,6 +26,7 @@ import random
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 W = H = 32
@@ -101,8 +103,23 @@ def cmd_sample(a):
     ps = load_ps(a.spirv)
     picked, per = pick_sample(ps, a.n, a.seed)
     os.makedirs(a.out, exist_ok=True)
-    with open(os.path.join(a.out, "sample.json"), "w", encoding="utf-8", newline="\n") as f:
-        json.dump([{"name": k, "stratum": list(stratum(ps[k]))} for k in picked], f)
+    sample_path = os.path.join(a.out, "sample.json")
+    sample = [{"name": k, "stratum": list(stratum(ps[k]))} for k in picked]
+    # Result logs refer to this order by row number. Publish a complete sample
+    # without replacing an existing one, even when two sample commands race.
+    with tempfile.TemporaryDirectory(dir=a.out, prefix=".ps-sample-") as staging:
+        candidate = os.path.join(staging, "sample.json")
+        with open(candidate, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(sample, f)
+        try:
+            if os.name == "nt":
+                os.rename(candidate, sample_path)
+            else:
+                os.link(candidate, sample_path)
+        except FileExistsError:
+            with open(sample_path, encoding="utf-8") as f:
+                if json.load(f) != sample:
+                    raise SystemExit("sample.json contains a different sample; use a new --out directory") from None
     print(f"population {len(ps)} strata {len(per)} sampled {len(picked)}")
     for s in sorted(per, key=str):
         print(f"  stratum {s}: population {per[s][0]} sampled {per[s][1]}")

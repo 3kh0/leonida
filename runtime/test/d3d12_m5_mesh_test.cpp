@@ -150,9 +150,21 @@ int main(int argc, char** argv) {
     if (device_status == vktest::DeviceStatus::unavailable) return 77;   // no Vulkan GPU: ctest skips
     if (device_status != vktest::DeviceStatus::ready) return 1;
 
-    const std::filesystem::path root_dir = LEONIDA_TEST_M5_MESH_DIR;
+    // ms_m5 is a wave64 shader. The native build needs 64 lanes in the mesh stage; a GPU that cannot give them (NVIDIA,
+    // Intel, Apple: 32 only) runs the same shader translated with --wave64-emulate, which is exact on any size.
+    std::filesystem::path root_dir = LEONIDA_TEST_M5_MESH_DIR;
     leonida::ShaderLibrary library;
     EXPECT(library.load((root_dir / "spirv").string()));
+    {
+        const auto native_ms = read_file(root_dir / "fssm" / "ms_m5.fssm");
+        const leonida::ShaderEntry* entry = library.find("ms", leonida::sha256_hex(native_ms));
+        EXPECT(entry != nullptr);
+        if (entry && leonida::decide_subgroup_size(*entry, d.subgroup).outcome == leonida::SubgroupOutcome::unavailable) {
+            root_dir = LEONIDA_TEST_M5_MESH_EMULATED_DIR;
+            library = leonida::ShaderLibrary{};
+            EXPECT(library.load((root_dir / "spirv").string()));
+        }
+    }
     const auto container_of = [&](const char* name, const char* stage, std::vector<std::uint8_t>& out) {
         const auto program = read_file(root_dir / "fssm" / (std::string(name) + ".fssm"));
         if (program.size() < 4 || !library.find(stage, leonida::sha256_hex(program))) return false;
@@ -297,7 +309,7 @@ int main(int argc, char** argv) {
             s.add(BlendSubobject{.inner = opaque});
             a.add(BlendSubobject{.inner = additive});
             EXPECT(stream_pso(s, mesh_opaque) && stream_pso(a, mesh_additive));
-            // ms_m5 is wave64 (not built with --wave64-emulate): it needs 64-wide subgroups in the mesh stage.
+            // Native ms_m5 needs 64-wide subgroups in the mesh stage; the emulated build asks for nothing.
             const auto* requests = rt::d3d12::pipeline_subgroup_requests(mesh_opaque.p);
             EXPECT(requests);
             bool mesh_request = false;
@@ -399,7 +411,9 @@ int main(int argc, char** argv) {
 
         // ===== (a) DispatchMesh =====
         {
-            const FLOAT grey[4] = {0.5f, 0.5f, 0.5f, 1.0f};
+            // 128/255, not 0.5: 0.5 * 255 is a tie that vkCmdClearColorImage rounds down on NVIDIA (127) and WARP rounds up
+            // (128). Clears are D3D-45's (#521); this test is about the mesh draws, so its background avoids the tie.
+            const FLOAT grey[4] = {128.0f / 255.0f, 128.0f / 255.0f, 128.0f / 255.0f, 1.0f};
             Image want({128, 128, 128, 255});
             EXPECT(begin(mesh_opaque.p, grey));
             set_constants(constants(0, 200, 40));

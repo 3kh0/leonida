@@ -199,6 +199,15 @@ To test the wave64 emulation that makes them exact on these GPUs, set `LEONIDA_W
 `check.py`, the shaders are checked against the emulated expectations without being emulated, and every wave64 test
 fails.
 
+The D3D12 M5 mesh tests (`d3d12_m5_mesh`, `d3d12_m5_mesh_fallbacks`, `d3d12_m5_mesh_chunks`) pick the shader build
+at run time: where the device can give the mesh stage 64 lanes they run the native wave64 `ms_m5`, and where it can't
+(NVIDIA, Intel, Apple) they run the same shader translated with `--wave64-emulate`, which `CMakeLists.txt` builds
+next to it. They run on 32-wide GPUs instead of skipping. Measured on an RTX 5080 (Linux, driver 580.65.06,
+cross-built with clang-cl and run under Wine 11 on Xvfb, the setup above): all three pass, 0 mismatched pixels in
+`DispatchMesh` and in `ExecuteIndirect DISPATCH_MESH`. The tests clear to 128/255, not 0.5: 0.5 * 255 is a rounding tie
+that `vkCmdClearColorImage` rounds down to 127 on NVIDIA and WARP rounds up to 128 (D3D-45, #521, owns that
+difference), and it was the only mismatch the emulated mesh run had (every background pixel, none inside a mesh cell).
+
 `ps_bitmask_perm` is a wave32 pixel shader, and a pixel shader's width can't be requested on every device. Intel
 drivers report subgroups of 8..32 and may run it 8 or 16 wide; its second pattern reads lanes 16-31, which then
 don't run. The test skips when the frame shows that (#1318), and the translation gives 0 for a source lane that

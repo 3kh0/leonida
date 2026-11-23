@@ -1583,6 +1583,28 @@ if(TARGET Vulkan::Headers)
       set(LEONIDA_M5_MESH_FILES ${LEONIDA_M5_MESH_DIR}/spirv/index.json ${LEONIDA_M5_MESH_DIR}/fssm/ms_m5.fssm
                                 ${LEONIDA_M5_MESH_DIR}/fssm/ps_m5_mesh.fssm ${LEONIDA_M5_MESH_DIR}/fssm/vs_m3.fssm
                                 ${LEONIDA_M5_MESH_DIR}/fssm/ps_m5_flat.fssm)
+      # The same shaders translated with --wave64-emulate, which the test uses where the GPU cannot give the mesh stage 64
+      # lanes (NVIDIA, Intel, Apple); the native build above is used where it can.
+      set(LEONIDA_M5_MESH_EMU_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/m5_mesh_shaders_w64e)
+      set(LEONIDA_M5_MESH_EMU_FILES ${LEONIDA_M5_MESH_EMU_DIR}/spirv/index.json ${LEONIDA_M5_MESH_EMU_DIR}/fssm/ms_m5.fssm
+                                    ${LEONIDA_M5_MESH_EMU_DIR}/fssm/ps_m5_mesh.fssm ${LEONIDA_M5_MESH_EMU_DIR}/fssm/vs_m3.fssm
+                                    ${LEONIDA_M5_MESH_EMU_DIR}/fssm/ps_m5_flat.fssm)
+      add_custom_command(
+        OUTPUT ${LEONIDA_M5_MESH_EMU_FILES}
+        COMMAND ${CMAKE_COMMAND} -E remove_directory ${LEONIDA_M5_MESH_EMU_DIR}
+        COMMAND ${CMAKE_COMMAND} -E env "LLVM_MC=${LEONIDA_LLVM_MC}" "LEONIDA_SPIRV_TOOLS=${LEONIDA_SPIRV_TOOLS_NATIVE}"
+                LEONIDA_W64_EMULATE=1
+                $<TARGET_FILE:Python3::Interpreter> -I ${CMAKE_CURRENT_SOURCE_DIR}/test/shaders/build.py
+                ${LEONIDA_M5_MESH_EMU_DIR} ms_m5 ps_m5_mesh vs_m3 ps_m5_flat
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/shaders/build.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/test/shaders/compute_fixture.py
+                ${CMAKE_CURRENT_SOURCE_DIR}/test/shaders/ms_m5.asm
+                ${CMAKE_CURRENT_SOURCE_DIR}/test/shaders/ps_m5_mesh.asm
+                ${CMAKE_CURRENT_SOURCE_DIR}/test/shaders/vs_m3.asm
+                ${CMAKE_CURRENT_SOURCE_DIR}/test/shaders/ps_m5_flat.asm
+                ${CMAKE_CURRENT_SOURCE_DIR}/../tools/rdna2spirv.py
+        COMMENT "Translating ms_m5, ps_m5_mesh, vs_m3 and ps_m5_flat with --wave64-emulate for the M5 mesh test"
+        VERBATIM)
       add_custom_command(
         OUTPUT ${LEONIDA_M5_MESH_FILES}
         COMMAND ${CMAKE_COMMAND} -E remove_directory ${LEONIDA_M5_MESH_DIR}
@@ -1598,10 +1620,12 @@ if(TARGET Vulkan::Headers)
                 ${CMAKE_CURRENT_SOURCE_DIR}/../tools/rdna2spirv.py
         COMMENT "Translating ms_m5, ps_m5_mesh, vs_m3 and ps_m5_flat for the M5 mesh test"
         VERBATIM)
-      add_executable(d3d12_m5_mesh_test test/d3d12_m5_mesh_test.cpp shims/d3d12_xs_device.cpp ${LEONIDA_M5_MESH_FILES})
+      add_executable(d3d12_m5_mesh_test test/d3d12_m5_mesh_test.cpp shims/d3d12_xs_device.cpp ${LEONIDA_M5_MESH_FILES}
+                     ${LEONIDA_M5_MESH_EMU_FILES})
       target_link_libraries(d3d12_m5_mesh_test PRIVATE gta6rt_d3d12_com)
       target_compile_definitions(d3d12_m5_mesh_test PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
-                                 LEONIDA_TEST_M5_MESH_DIR="${LEONIDA_M5_MESH_DIR}")
+                                 LEONIDA_TEST_M5_MESH_DIR="${LEONIDA_M5_MESH_DIR}"
+                                 LEONIDA_TEST_M5_MESH_EMULATED_DIR="${LEONIDA_M5_MESH_EMU_DIR}")
       target_compile_options(d3d12_m5_mesh_test PRIVATE /W4 /permissive- /utf-8)
       add_test(NAME d3d12_m5_mesh COMMAND d3d12_m5_mesh_test)
       add_test(NAME d3d12_m5_mesh_fallbacks COMMAND d3d12_m5_mesh_test --single-calls --no-count-buffers)

@@ -11,6 +11,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
@@ -49,6 +50,7 @@ class ExeChecklist(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = self.tmp.name
         os.makedirs(os.path.join(self.root, "runtime", "shims"))
+        os.makedirs(os.path.join(self.root, "runtime", "src"))
         os.makedirs(os.path.join(self.root, "docs"))
         for rel, text in (("runtime/shims/demo.cpp", SHIM), ("runtime/shims/other.cpp", OTHER), ("docs/demo.md", DOC)):
             with open(os.path.join(self.root, rel), "w", encoding="utf-8", newline="\n") as f:
@@ -99,6 +101,24 @@ class ExeChecklist(unittest.TestCase):
         with contextlib.redirect_stderr(stderr):
             self.assertEqual(ec.main(["--root", self.root, "--gdk-calls", os.path.join(self.root, "missing.json")]), 1)
         self.assertIn("cannot read", stderr.getvalue())
+
+    def test_an_unlistable_subfolder_is_an_error_not_a_quiet_skip(self):
+        blocked = os.path.join(self.root, "runtime", "src")
+        # setUp already made runtime/src
+        real_scandir = os.scandir
+
+        def scandir(path, *args, **kwargs):
+            if os.path.normcase(os.path.realpath(path)) == os.path.normcase(os.path.realpath(blocked)):
+                raise PermissionError(13, "Permission denied", blocked)
+            return real_scandir(path, *args, **kwargs)
+
+        with mock.patch.object(ec.os, "scandir", scandir):
+            with self.assertRaises(PermissionError):
+                ec.collect(self.root)
+        stderr = io.StringIO()
+        with mock.patch.object(ec.os, "scandir", scandir), contextlib.redirect_stderr(stderr):
+            self.assertEqual(ec.main(["--root", self.root]), 1)
+        self.assertIn("cannot scan", stderr.getvalue())
 
     def test_this_repository(self):
         notes = ec.collect(ROOT)

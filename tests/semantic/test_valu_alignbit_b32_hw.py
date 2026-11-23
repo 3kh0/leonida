@@ -108,5 +108,69 @@ class TestValuAlignbitB32Oracle(unittest.TestCase):
         self.assertEqual(ref_alignbit_b32(s0_31, s1_31, 31), 3)
 
 
+class OperandKind(Enum):
+    VGPR = auto()
+    SGPR = auto()
+    IMM = auto()
+
+
+@dataclass(frozen=True)
+class Operand:
+    kind: OperandKind
+    index: int = 0
+    value: int = 0
+
+    @staticmethod
+    def vgpr(idx: int) -> Operand:
+        return Operand(OperandKind.VGPR, index=idx)
+
+    @staticmethod
+    def sgpr(idx: int) -> Operand:
+        return Operand(OperandKind.SGPR, index=idx)
+
+    @staticmethod
+    def imm(val: int) -> Operand:
+        return Operand(OperandKind.IMM, value=val & MASK32)
+
+
+@dataclass(frozen=True)
+class VAlignbitB32Instruction:
+    dst: Operand
+    src0: Operand
+    src1: Operand
+    src2: Operand
+
+    def disasm(self) -> str:
+        def fmt(op: Operand) -> str:
+            if op.kind == OperandKind.VGPR:
+                return f"v{op.index}"
+            if op.kind == OperandKind.SGPR:
+                return f"s{op.index}"
+            return str(op.value)
+        return f"v_alignbit_b32 {fmt(self.dst)}, {fmt(self.src0)}, {fmt(self.src1)}, {fmt(self.src2)}"
+
+
+class TestValuAlignbitB32AST(unittest.TestCase):
+    """Stage 2: AST opcode definitions and typed expressions."""
+
+    def test_ast_construction_and_formatting(self) -> None:
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(0),
+            src0=Operand.vgpr(1),
+            src1=Operand.vgpr(2),
+            src2=Operand.imm(8),
+        )
+        self.assertEqual(instr.disasm(), "v_alignbit_b32 v0, v1, v2, 8")
+
+    def test_ast_mixed_operands(self) -> None:
+        instr = VAlignbitB32Instruction(
+            dst=Operand.vgpr(5),
+            src0=Operand.sgpr(2),
+            src1=Operand.vgpr(10),
+            src2=Operand.sgpr(4),
+        )
+        self.assertEqual(instr.disasm(), "v_alignbit_b32 v5, s2, v10, s4")
+
+
 if __name__ == "__main__":
     unittest.main()
